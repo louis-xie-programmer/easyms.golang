@@ -52,3 +52,8 @@
 ├── Infrastructure 层（外部依赖） // DB、缓存、MQ、第三方服务封装
 ├── Interface 层（接入接口）       // 网关、CLI、WebSocket 等
 ├── Framework 层（基础能力）      // 配置、注册、日志、RPC、认证等
+```
+
+## 四、项目任务进程
+
+https://github.com/users/louis-xie-programmer/projects/5
