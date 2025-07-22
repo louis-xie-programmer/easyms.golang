@@ -1,0 +1,5 @@
+log:
+  level: info
+  output: server2.log
+server:
+  port: 8081

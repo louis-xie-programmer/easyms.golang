@@ -5,10 +5,12 @@
 > **目标受众：后端架构师、Golang 工程师、DevOps 实践者、团队技术负责人**
 
 ---
+以下是当前相关的博文，结合博文，可快速了解本系统的核心功能和实现原理, 后续会持续更新，欢迎大家扫码关注“代码扳手”公众号，获取更多技术交流信息。
 
+![wx.jpg](wx.jpg)
 ## 一、项目背景：微服务的现实挑战
 
-在当前云原生基础设施和中大型系统架构设计日趋成熟的背景下，微服务已不再是“是否采用”的问题，而是“如何落地”的问题。
+在当前云原生基础设施和中大型系统架构设计日趋成熟的背景下，微服务已不再是"是否采用"的问题，而是"如何落地"的问题。
 
 然而，在 Golang 技术栈中，虽然具备构建高性能微服务的语言优势，却缺少一套 **系统化、可复用、符合现代软件工程要求的微服务架构实践模板**。目前存在的问题包括：
 
@@ -54,6 +56,124 @@
 ├── Framework 层（基础能力）      // 配置、注册、日志、RPC、认证等
 ```
 
-## 四、项目任务进程
+### 2. 配置管理规范
 
-https://github.com/users/louis-xie-programmer/projects/5
+采用统一配置源管理策略，支持 Consul 和本地文件两种模式：
+
+```yaml
+# configs/app.yaml
+configuration_type: consul # 或 local
+consul:
+  address: http://localhost:8500
+```
+
+**配置加载规则**：
+1. 配置源必须严格二选一：全部使用 Consul 或全部使用本地配置
+2. Consul 模式下所有配置从 KV 存储获取，路径规范：
+   - 共享配置：`easyms/share/{env}.yaml`
+   - 私有配置：`easyms/{service}/{env}.yaml`
+3. 本地模式配置路径：
+   - 共享配置：`configs/share/{env}.yaml`
+   - 私有配置：`configs/{service}/{env}.yaml`
+4. 配置合并使用深度合并算法，私有配置优先级高于共享配置
+
+### 3. 日志规范
+
+```go
+// pkg/logger 实现
+logger.Info().Str("service", "server1").Msg("Service started")
+```
+
+- 结构化 JSON 格式输出
+- 支持多级管道分流（控制台/文件/Loki）
+- 动态日志级别配置
+
+---
+
+## 四、项目结构
+
+```text
+.
+├── configs              # 配置文件
+│   ├── server1          # 服务1配置
+│   │   ├── dev.yaml
+│   │   └── prod.yaml
+│   ├── server2          # 服务2配置
+│   ├── share            # 共享配置
+│   └── app.yaml         # 配置源声明
+├── deploy               # 部署配置
+│   └── docker
+│       ├── consul       # Consul 配置
+│       ├── loki         # Loki 配置
+│       ├── promtail     # Promtail 配置
+│       └── docker-compose.yaml
+├── pkg
+│   ├── config           # 配置加载模块
+│   │   ├── config.go    # 配置结构定义
+│   │   ├── consul.go    # Consul 交互
+│   │   └── loader.go    # 配置加载器
+│   └── logger           # 日志模块
+│       ├── logger.go    # 日志接口
+│       └── loki_logger.go # Loki 集成
+├── test                 # 测试服务
+└── README.md            # 项目文档
+```
+
+---
+
+## 五、快速启动指南
+
+### 1. 环境准备
+
+```bash
+# 必需工具
+- Go 1.24.0+
+- Docker
+- Consul
+- Loki + Promtail
+```
+
+### 2. 启动基础设施
+
+```bash
+# 启动 Consul
+docker run -d --name=consul -p 8500:8500 consul:latest
+
+# 启动 Loki 和 Promtail
+docker-compose -f deploy/docker/docker-compose.yaml up -d loki promtail
+```
+
+### 3. 上传配置到 Consul
+
+```bash
+# Linux/macOS
+curl -X PUT http://localhost:8500/v1/kv/easyms/share/dev.yaml \
+     --data-binary @configs/share/dev.yaml
+
+# Windows PowerShell
+Invoke-WebRequest -Uri http://localhost:8500/v1/kv/easyms/share/dev.yaml \
+    -Method PUT -InFile configs\share\dev.yaml
+```
+
+### 4. 构建与运行
+
+```bash
+# 构建服务
+go build -o ./bin/server ./cmd/server
+
+# 运行服务
+CONFIG_ENV=dev go run ./cmd/server
+```
+
+---
+
+## 六、技术选型
+
+| 组件          | 版本       | 用途                |
+|---------------|------------|---------------------|
+| Golang        | 1.24.0+    | 核心开发语言        |
+| Consul        | 1.32.1     | 服务注册与配置中心   |
+| zerolog       | 1.34.0     | 结构化日志库        |
+| Loki          | latest     | 日志聚合系统        |
+| Promtail      | latest     | 日志收集代理        |
+| gopkg.in/yaml | v2.4.0     | YAML 解析库         |

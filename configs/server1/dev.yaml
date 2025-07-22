@@ -1,0 +1,11 @@
+# \configs\dev.yaml
+log:
+  log_type: local
+  log_level: debug
+server:
+  host: localhost
+  port: 8080
+  tls:
+    enable: true
+    cert: ./cert/server.crt
+    key: ./cert/server.key
