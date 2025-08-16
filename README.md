@@ -177,3 +177,108 @@ CONFIG_ENV=dev go run ./cmd/server
 | Loki          | latest     | 日志聚合系统        |
 | Promtail      | latest     | 日志收集代理        |
 | gopkg.in/yaml | v2.4.0     | YAML 解析库         |
+
+---
+
+## 七、网关熔断与动态限流：高可用微服务的护城河
+
+### 1. 功能亮点
+
+- **熔断保护**：基于 [mercari/go-circuitbreaker](https://github.com/mercari/go-circuitbreaker)，为每个后端实例独立熔断，自动隔离异常节点，防止雪崩。
+- **多元限流**：支持按 IP 段、UserAgent（正则）等多维度限流，规则可通过 Consul 或 YAML 配置，热更新秒级生效。
+- **配置热更新**：限流与熔断参数均可动态调整，无需重启服务，适应突发流量和业务变化。
+- **可观测性**：熔断状态变更、限流命中均可埋点，便于监控与报警。
+
+### 2. 原理与关键实现
+
+#### 熔断器（Circuit Breaker）
+
+- 每个后端实例分配独立熔断器，支持失败率、窗口、半开等参数灵活配置。
+- 状态流转（Closed→Open→Half-Open→Closed）自动管理，Ready/Done 标准用法，防止误用。
+- 状态变更支持回调，可集成日志与监控。
+
+**示例代码：**
+```go
+cb := circuitbreaker.New(
+    circuitbreaker.WithCounterResetInterval(10*time.Second),
+    circuitbreaker.WithHalfOpenMaxSuccesses(4),
+    circuitbreaker.WithTripFunc(
+        circuitbreaker.NewTripFuncFailureRate(10, 0.4),
+    ),
+    circuitbreaker.WithOnStateChangeHookFn(func(from, to circuitbreaker.State) {
+        fmt.Printf("[CB][%s] 状态变更: %s -> %s\n", name, from, to)
+    }),
+)
+if !cb.Ready() {
+    return nil, errors.New("circuit breaker open")
+}
+defer func() { err = cb.Done(ctx, err) }()
+```
+
+#### 动态限流（Rate Limiting）
+
+- 支持多维度限流规则（IP 段、UserAgent），规则存储于 Consul 或 YAML，支持正则表达式。
+- Gin 中间件自动按规则匹配，未命中走默认限流。
+- 配置变更后自动同步，无需重启。
+
+**配置示例：**
+```yaml
+rate_limit:
+  ip_limits:
+    - cidr: "192.168.1.0/24"
+      rate: 20
+      burst: 40
+  ua_limits:
+    - pattern: ".*Chrome.*"
+      rate: 50
+      burst: 100
+  default_rate: 100
+  default_burst: 200
+```
+
+**核心代码：**
+```go
+func (lm *LimiterManager) SyncFromAppConfig() {
+    cfg := config.GetAppConfig()
+    if cfg == nil || cfg.RateLimit == nil {
+        return
+    }
+    lm.mu.Lock()
+    defer lm.mu.Unlock()
+    // 解析并重建限流规则
+}
+```
+
+### 3. 一图胜千言
+
+```
+┌─────────────┐
+│   Client    │
+└─────┬───────┘
+      │
+      ▼
+┌─────────────┐
+│   Gateway   │
+│ ┌─────────┐ │
+│ │ 限流器  │ │ ←─ 动态规则（Consul/YAML）
+│ └─────────┘ │
+│ ┌─────────┐ │
+│ │ 熔断器  │ │ ←─ 每实例独立
+│ └─────────┘ │
+└─────┬───────┘
+      │
+      ▼
+┌─────────────┐
+│  Backend    │
+└─────────────┘
+```
+
+### 4. 体验与源码
+
+- GitHub: [https://github.com/louis-xie-programmer/easyms.golang](https://github.com/louis-xie-programmer/easyms.golang)
+- Gitee: [https://gitee.com/louis_xie/easyms.golang](https://gitee.com/louis_xie/easyms.golang)
+
+---
+
+> **120字摘要**  
+easyms.golang 网关支持 mercari/go-circuitbreaker 熔断与 Consul 动态限流，按 IP 段、UserAgent 精细限流，规则热更新，异常实例自动隔离，助力系统弹性与自愈，源码开源可查阅。

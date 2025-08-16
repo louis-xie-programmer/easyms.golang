@@ -117,20 +117,22 @@ func main() {
 		instancers[svc] = inst
 	}
 
-	// ...已在 factory 内实现 per-instance 熔断...
-
-	// 限流器（配置驱动）
-	//limitRate := 10
-	//burst := 20
-	//if appConfig != nil && appConfig.Server.Port != 0 {
-	//	limitRate = appConfig.Server.Port // 示例：可从配置读取限流参数
-	//}
-	//limiter := rate.NewLimiter(rate.Limit(limitRate), burst)
-
 	// Gin 路由
 	r := gin.Default()
 	//r.Use(middleware.AuthMiddleware())
-	//r.Use(middleware.RateLimitMiddleware(limiter))
+
+	// === 限流器集成（基于 appConfig 实时同步） ===
+	limiterManager, _ := middleware.NewLimiterManager(&middleware.ConsulRateLimitConfig{}, 100, 200)
+	limiterManager.SyncFromAppConfig() // 启动时同步一次
+	r.Use(limiterManager.Middleware())
+
+	// 启动后台 goroutine 定时同步配置（如有 Consul 热更新，建议10s~30s同步一次）
+	go func() {
+		for {
+			limiterManager.SyncFromAppConfig()
+			time.Sleep(10 * time.Second)
+		}
+	}()
 
 	// API 路由转发（多服务）
 	r.Any("/api/:service/*action", func(c *gin.Context) {
