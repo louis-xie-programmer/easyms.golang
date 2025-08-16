@@ -1,6 +1,7 @@
-# configs/app.yaml
-store_type: consul
-consul:
-  host: localhost:8500
-  key_path: easyms/share/%s.yaml,easyms/%s/%s.yaml
-  reload_on_changes: true
+log:
+  log_level: info
+  log_type: loki
+loki:
+  url: "http://localhost:3100"
+  username: "admin"
+  password: "admin"

@@ -2,4 +2,5 @@ log:
   level: info
   output: server2.log
 server:
-  port: 8081
+  host: "172.29.16.1"
+  port: 10003

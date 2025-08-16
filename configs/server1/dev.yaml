@@ -3,8 +3,8 @@ log:
   log_type: local
   log_level: debug
 server:
-  host: localhost
-  port: 8080
+  host: "172.29.16.1"
+  port: 10002
   tls:
     enable: true
     cert: ./cert/server.crt

@@ -7,6 +7,9 @@ import (
 	"easyms/pkg/logger"
 	"fmt"
 	"os"
+
+	"github.com/gin-gonic/gin"
+	consulapi "github.com/hashicorp/consul/api"
 )
 
 func main() {
@@ -23,15 +26,50 @@ func main() {
 	}
 
 	appConfig := config.GetAppConfig()
-
 	logger.Init("server1", appConfig)
 
-	print(appConfig)
+	// Consul注册
+	// 获取 Consul 地址
+	consulHost := "localhost:8500"
+	if configStore := config.GetAppConfigStore(); configStore != nil && configStore.Consul.Host != "" {
+		consulHost = configStore.Consul.Host
+	}
+	consulConfig := consulapi.DefaultConfig()
+	consulConfig.Address = consulHost
+	consulClient, err := consulapi.NewClient(consulConfig)
+	if err != nil {
+		logger.Error(err, "Consul client error", "server1", nil)
+	} else {
+		registration := &consulapi.AgentServiceRegistration{
+			ID:      fmt.Sprintf("server1-%d", appConfig.Server.Port),
+			Name:    "server1",
+			Address: appConfig.Server.Host,
+			Port:    appConfig.Server.Port,
+			Check: &consulapi.AgentServiceCheck{
+				HTTP:     fmt.Sprintf("http://%s:%d/health", appConfig.Server.Host, appConfig.Server.Port),
+				Interval: "10s",
+				Timeout:  "5s",
+			},
+		}
+		err = consulClient.Agent().ServiceRegister(registration)
+		if err != nil {
+			logger.Error(err, "Consul register error", "server1", nil)
+		} else {
+			logger.Info("Consul service registered", "server1", nil)
+		}
+	}
 
-	logger.Warn(fmt.Sprintf("Server started with config: %s", "server1"), "server1", nil)
-	logger.Warn(fmt.Sprintf("Server emd with config: %s", "server1"), "server1", nil)
-
-	select {}
-
+	r := gin.Default()
+	r.GET("/hello", func(c *gin.Context) {
+		c.JSON(200, gin.H{"msg": "Hello from server1"})
+	})
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(200, gin.H{"status": "ok"})
+	})
+	logger.Warn(fmt.Sprintf("Server1 started on port %d", appConfig.Server.Port), "server1", nil)
+	err = r.Run(fmt.Sprintf(":%d", appConfig.Server.Port))
+	if err != nil {
+		logger.Error(err, "Gin server error", "server1", nil)
+	}
 	logger.Shutdown()
 }

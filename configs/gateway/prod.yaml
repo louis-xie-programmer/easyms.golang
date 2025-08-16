@@ -1,0 +1,13 @@
+server:
+  host: "0.0.0.0"
+  port: 10001
+store_type: consul
+consul:
+  host: "localhost:8500"
+  key_path: easyms/share/%s.yaml,%s/%s
+  reload_on_changes: true
+database:
+  host: "localhost"
+  port: 3306
+  user: "root"
+  password: "password"
