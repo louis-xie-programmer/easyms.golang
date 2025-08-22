@@ -4,9 +4,9 @@ package logger
 
 import (
 	"bytes"
-	"easyms/pkg/config"
 	"encoding/json"
 	"fmt"
+	"github.com/louis-xie-programmer/easyms/pkg/config"
 	"net/http"
 	"strconv"
 )
@@ -119,11 +119,11 @@ func (l *LokiLogger) Log(logs []LogEntry) error {
 //	*LokiLogger: 初始化后的LokiLogger指针
 //
 // 初始化结构体字段并配置HTTP客户端，设置5秒超时限制
-func NewLokiLogger(service string, cfg config.LokiConfig) *LokiLogger {
+func NewLokiLogger(service string, cfg config.AppConfig) *LokiLogger {
 	return &LokiLogger{
-		url:      cfg.URL,
+		url:      cfg.Loki["Url"],
 		service:  service,
-		username: cfg.Username,
-		password: cfg.Password,
+		username: cfg.Loki["username"],
+		password: cfg.Loki["password"],
 	}
 }

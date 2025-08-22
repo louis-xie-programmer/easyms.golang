@@ -1,0 +1,6 @@
+server:
+  host: "0.0.0.0"
+  port: 10001
+database:
+  type: postgres
+  dns: easy:easyms@localhost:5432/easy-db

@@ -1,7 +1,0 @@
-log:
-  log_level: info
-  log_type: loki
-loki:
-  url: "http://localhost:3100"
-  username: "admin"
-  password: "admin"

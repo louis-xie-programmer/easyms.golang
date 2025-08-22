@@ -1,8 +1,0 @@
-# configs/prod.yaml
-log:
-  type: loki
-  log_level: warn
-loki:
-  url: http://localhost:3100/loki/api/v1/push
-  username: easy
-  password: easyms

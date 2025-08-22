@@ -3,8 +3,8 @@
 package logger
 
 import (
-	"easyms/pkg/config"
 	"fmt"
+	"github.com/louis-xie-programmer/easyms/pkg/config"
 	"strings"
 	"sync"
 	"time"
@@ -43,13 +43,13 @@ func shouldLog(level string) bool {
 func Init(service string, cfg *config.AppConfig) {
 	// 初始化全局服务名称和日志级别
 	defaultService = service
-	minLogLevel = strings.ToLower(cfg.Log.LogLevel)
+	minLogLevel = strings.ToLower(cfg.Log["log_level"])
 
 	// 根据配置创建不同的日志实现
-	switch strings.ToLower(cfg.Log.LogType) {
+	switch strings.ToLower(minLogLevel) {
 	case "loki":
 		// 使用Loki日志系统
-		loggerImpl = NewLokiLogger(service, cfg.Loki)
+		loggerImpl = NewLokiLogger(service, *cfg)
 	default:
 		// 默认使用Zerolog日志系统
 		loggerImpl = NewZerologLogger(service, minLogLevel)

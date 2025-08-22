@@ -1,0 +1,48 @@
+version: "3.9"
+services:
+  consul:
+    image: consul:1.16
+    ports:
+      - "8500:8500"
+
+  auth-db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: authuser
+      POSTGRES_PASSWORD: authpass
+      POSTGRES_DB: authdb
+    ports:
+      - "5432:5432"
+
+  auth-svc:
+    build:
+      context: .
+      dockerfile: ./cmd/auth-svc/Dockerfile
+    environment:
+      POSTGRES_DSN: postgres://authuser:authpass@auth-db:5432/authdb?sslmode=disable
+      CONSUL_ADDR: consul:8500
+    depends_on:
+      - auth-db
+      - consul
+
+  user-svc:
+    build:
+      context: .
+      dockerfile: ./cmd/user-svc/Dockerfile
+    environment:
+      CONSUL_ADDR: consul:8500
+    depends_on:
+      - consul
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: ./cmd/api-gateway/Dockerfile
+    environment:
+      CONSUL_ADDR: consul:8500
+    ports:
+      - "8082:8082"
+    depends_on:
+      - consul
+      - user-svc
+      - auth-svc
