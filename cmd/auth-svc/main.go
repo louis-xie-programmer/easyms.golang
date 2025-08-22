@@ -107,7 +107,7 @@ func main() {
 	})
 
 	var KitLogger kitlog.Logger
-	KitLogger = kitlog.NewLogfmtLogger(os.Stderr)
+	KitLogger = logger.NewKitLoggerAdapter()
 	KitLogger = kitlog.With(KitLogger, "ts", kitlog.DefaultTimestampUTC)
 	KitLogger = kitlog.With(KitLogger, "caller", kitlog.DefaultCaller)
 
@@ -140,13 +140,11 @@ func main() {
 
 	instanceId := serviceName + "-" + uuid.NewV4().String()
 
-	easyLog := logger.NewKitLoggerAdapter()
-
 	//http server
 	go func() {
 		//config.Logger.Println("Http Server start at port:" + strconv.Itoa(*servicePort))
 		//启动前执行注册
-		if !discoveryClient.Register(serviceName, instanceId, "/health", serviceHost, servicePort, nil, &easyLog) {
+		if !discoveryClient.Register(serviceName, instanceId, "/health", serviceHost, servicePort, nil, &KitLogger) {
 			//config.Logger.Printf("use-string-service for service %s failed.", serviceName)
 			// 注册失败，服务启动失败
 			os.Exit(-1)
@@ -162,7 +160,7 @@ func main() {
 	}()
 
 	//服务退出取消注册
-	discoveryClient.DeRegister(instanceId, &easyLog)
+	discoveryClient.DeRegister(instanceId, &KitLogger)
 
 	logger.Info("exit", "main", [][]string{{"event", "main"}})
 }

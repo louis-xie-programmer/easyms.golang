@@ -15,7 +15,7 @@
   - 配置中心（KV）
 
 - **Auth Service** 🔐
-  - OAuth2 提供方，使用 [fosite](https://github.com/ory/fosite)
+  - OAuth2
   - Postgres 存储 client 和 token
   - JWT RS256 签名认证
 
@@ -59,7 +59,7 @@ func registerService(client *api.Client, serviceID string) error {
 
 ### 认证授权
 
-使用 [Fosite](https://www.ory.sh/docs/fosite) 实现的 OAuth2 授权服务，支持 client_credentials 模式，提供 JWT Token 颁发和 JWK 公钥暴露功能。
+使用 OAuth2 授权服务，支持 client_credentials 模式，提供 JWT Token 颁发和 JWK 公钥暴露功能。
 
 ### 熔断保护
 
@@ -80,7 +80,7 @@ docker compose up --build
 
 - client_id: `demo-client`
 - client_secret: `demo-secret`
-- redirect_uri: `http://localhost:8080/callback`
+- redirect_uri: `http://localhost:10001/oauth/callback`
 - scope: `user.read`
 
 #### 获取 Access Token
@@ -105,7 +105,7 @@ curl -X POST "http://localhost:8080/oauth/token"   -u "demo-client:demo-secret" 
 #### 调用用户服务 API (经由网关)
 
 ```bash
-curl -H "Authorization: Bearer <ACCESS_TOKEN>"   http://localhost:8082/api/profile
+curl -H "Authorization: Bearer <ACCESS_TOKEN>"   http://localhost:10002/api/profile
 ```
 
 返回：
@@ -135,9 +135,9 @@ circuit_breaker_state{instance="user-svc:8081"} 0
 
 #### 健康检查
 
-- Auth Service: [http://localhost:10001/health](http://localhost:8080/health)  
-- User Service: [http://localhost:10002/health](http://localhost:8081/health)  
-- API Gateway: [http://localhost:10000/health](http://localhost:8082/health)  
+- Auth Service: [http://localhost:10001/health](http://localhost:10001/health)  
+- User Service: [http://localhost:10002/health](http://localhost:10002/health)  
+- API Gateway: [http://localhost:10000/health](http://localhost:10000/health)  
 
 ## 避坑指南 ⚠️
 
@@ -167,7 +167,8 @@ circuit_breaker_state{instance="user-svc:8081"} 0
 
 ## 项目地址
 
-GitHub: [https://github.com/easyms/easyms](https://github.com/easyms/easyms)
+GitHub: [https://github.com/louis-xie-programmer/easyms.golang](https://github.com/louis-xie-programmer/easyms.golang)
+Gitee: [https://gitee.com/louis_xie/easyms.golang](https://gitee.com/louis_xie/easyms.golang)
 
 ## License
 

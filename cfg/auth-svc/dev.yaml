@@ -5,6 +5,6 @@ database:
   type: postgres
   host: localhost
   port: 5432
-  user: easy
-  password: easyms
-  dbname: easy-db
+  user: authuser
+  password: authpass
+  dbname: authdb

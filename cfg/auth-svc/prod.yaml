@@ -3,4 +3,8 @@ server:
   port: 10001
 database:
   type: postgres
-  dns: easy:easyms@localhost:5432/easy-db
+  host: localhost
+  port: 5432
+  user: authuser
+  password: authpass
+  dbname: authdb
