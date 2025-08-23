@@ -76,7 +76,12 @@ func (v *Validator) Middleware(next http.Handler) http.Handler {
 				key, found = v.set.LookupKeyID(keyID)
 				if !found { return nil, errors.New("unknown key id") }
 			}
-			return key.Materialize()
+			// 使用Raw方法获取原始密钥材料
+			var rawKey interface{}
+			if err := key.Raw(&rawKey); err != nil {
+				return nil, err
+			}
+			return rawKey, nil
 		})
 		if err != nil { http.Error(w, "invalid token: "+err.Error(), http.StatusUnauthorized); return }
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), "claims", claims)))

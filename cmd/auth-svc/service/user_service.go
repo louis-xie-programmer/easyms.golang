@@ -35,7 +35,8 @@ func (service *PostgresUserDetailsService) GetUserDetailByUsername(ctx context.C
 		return nil, err
 	}
 
-	if userDetails.Password != password {
+	// 使用bcrypt验证密码
+	if !userDetails.CheckPassword(password) {
 		return nil, ErrPassword
 	}
 
@@ -52,7 +53,7 @@ func (service *InMemoryUserDetailsService) GetUserDetailByUsername(ctx context.C
 	userDetails, ok := service.userDetailsDict[username]
 	if ok {
 		// 比较 password 是否匹配
-		if userDetails.Password == password {
+		if userDetails.CheckPassword(password) {
 			return userDetails, nil
 		} else {
 			return nil, ErrPassword
@@ -68,6 +69,10 @@ func NewInMemoryUserDetailsService(userDetailsList []*model.UserDetails) UserDet
 
 	if userDetailsList != nil {
 		for _, value := range userDetailsList {
+			// 为内存中的用户生成密码哈希
+			if value.Password != "" && value.PasswordHash == "" {
+				value.HashPassword()
+			}
 			userDetailsDict[value.Username] = value
 		}
 	}

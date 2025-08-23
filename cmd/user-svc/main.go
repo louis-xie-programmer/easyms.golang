@@ -1,11 +1,9 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/go-chi/chi/v5"
-	"github.com/golang-jwt/jwt/v5"
 	consulapi "github.com/hashicorp/consul/api"
 	"github.com/louis-xie-programmer/easyms/pkg/auth"
 	"github.com/louis-xie-programmer/easyms/pkg/config"
@@ -16,7 +14,8 @@ import (
 )
 
 type Profile struct {
-	ID, Name string `json:"id"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 func main() {
@@ -44,43 +43,14 @@ func main() {
 	r := chi.NewRouter()
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
 	r.Group(func(pr chi.Router) {
-		// middleware: naive verification using remote jwks; for demo we simply decode token without verifying to extract scopes.
-		pr.Use(func(next http.Handler) http.Handler {
-			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				// naive check - in prod use proper JWK fetch & jwt.Parse with keyfunc
-				authz := r.Header.Get("Authorization")
-				if authz == "" {
-					http.Error(w, "missing auth", 401)
-					return
-				}
-				token := authz[len("Bearer "):]
-				parsed, _, err := new(jwt.Parser).ParseUnverified(token, jwt.MapClaims{})
-				if err != nil {
-					http.Error(w, "invalid token", 401)
-					return
-				}
-				if claims, ok := parsed.Claims.(jwt.MapClaims); ok {
-					// check scope contains user.read
-					if sc, ok := claims["scope"].([]interface{}); ok {
-						has := false
-						for _, v := range sc {
-							if s, ok := v.(string); ok && s == "user.read" {
-								has = true
-								break
-							}
-						}
-						if !has {
-							http.Error(w, "forbidden", 403)
-							return
-						}
-					}
-					ctx := context.WithValue(r.Context(), auth.CtxClaims, claims)
-					next.ServeHTTP(w, r.WithContext(ctx))
-					return
-				}
-				http.Error(w, "invalid claims", 401)
-			})
-		})
+		// 创建认证验证器
+		validator, err := auth.NewValidator(consulAddr, "")
+		if err != nil {
+			log.Fatal("Failed to create auth validator:", err)
+		}
+
+		// 使用pkg/auth包中的安全验证中间件
+		pr.Use(validator.Middleware)
 		pr.Get("/v1/profile", func(w http.ResponseWriter, r *http.Request) {
 			p := Profile{ID: "42", Name: "Ada Lovelace"}
 			json.NewEncoder(w).Encode(p)

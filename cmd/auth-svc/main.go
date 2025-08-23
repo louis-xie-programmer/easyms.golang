@@ -71,13 +71,17 @@ func main() {
 	var srv service.Service
 
 	tokenEnhancer = storage.NewJwtTokenEnhancer("secret")
-	tokenStore = storage.NewJwtTokenStore(tokenEnhancer.(*storage.JwtTokenEnhancer))
-	tokenService = service.NewTokenService(tokenStore, tokenEnhancer)
 
+	// 初始化数据库连接
 	dbase, err := db.NewEasyDatabase("postgres", "postgres://postgres:123456@127.0.0.1:5432/postgres?sslmode=disable")
 	if err != nil {
+		logger.Error(err, "Database connection failed", "main", [][]string{{"event", "db_connect"}})
 		os.Exit(-1)
 	}
+
+	// 使用支持令牌撤销功能的TokenStore
+	tokenStore = storage.NewJwtTokenStore(tokenEnhancer.(*storage.JwtTokenEnhancer), dbase.(*db.EasyDatabase))
+	tokenService = service.NewTokenService(tokenStore, tokenEnhancer)
 
 	users := []*model.UserDetails{{
 		Username:    "simple",
@@ -92,10 +96,18 @@ func main() {
 			Authorities: []string{"Admin"},
 		}}
 
+	// 为用户生成密码哈希
 	for _, user := range users {
+		err = user.HashPassword()
+		if err != nil {
+			logger.Error(err, "Failed to hash password", "main", [][]string{{"event", "hash_password"}})
+			os.Exit(-1)
+		}
+		// 清除明文密码
+		user.Password = ""
 		err = dbase.Insert(user)
 		if err != nil {
-			os.Exit(-1)
+			// 忽略插入错误，可能用户已存在
 		}
 	}
 
