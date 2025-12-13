@@ -2,37 +2,44 @@ package service
 
 import (
 	"context"
+	"easyms/cmd/auth-svc/model"
+	"easyms/pkg/db"
 	"errors"
-	"github.com/louis-xie-programmer/easyms/cmd/auth-svc/model"
-	"github.com/louis-xie-programmer/easyms/pkg/db"
 )
 
 var (
+	// ErrClientNotExist 客户端不存在错误
 	ErrClientNotExist = errors.New("clientId is not exist")
-	ErrClientSecret   = errors.New("invalid clientSecret")
+	// ErrClientSecret 客户端密钥错误错误
+	ErrClientSecret = errors.New("invalid clientSecret")
 )
 
 // ClientDetailsService Service Define a service interface
 type ClientDetailsService interface {
+	// GetClientDetailByClientId 根据客户端ID和客户端密钥获取客户端详细信息
 	GetClientDetailByClientId(ctx context.Context, clientId string, clientSecret string) (*model.ClientDetails, error)
 }
 
+// NewInMemoryClientDetailsService 创建内存中的客户端详细信息服务实例
 func NewInMemoryClientDetailsService(clientDetailsDict map[string]*model.ClientDetails) ClientDetailsService {
 	return &InMemoryClientDetailsService{
 		clientDetailsDict: clientDetailsDict,
 	}
 }
 
+// PostgresClientDetailsService 创建 Postgres 数据库客户端详细信息服务实例
 type PostgresClientDetailsService struct {
 	db *db.EasyDatabase
 }
 
+// NewPostgresClientDetailsService 创建 Postgres 数据库客户端详细信息服务实例
 func NewPostgresClientDetailsService(db *db.EasyDatabase) ClientDetailsService {
 	return &PostgresClientDetailsService{
 		db: db,
 	}
 }
 
+// GetClientDetailByClientId 根据客户端ID和客户端密钥获取客户端详细信息
 func (service *PostgresClientDetailsService) GetClientDetailByClientId(ctx context.Context, clientId string, clientSecret string) (*model.ClientDetails, error) {
 	var clientDetails model.ClientDetails
 	err := service.db.Query(&clientDetails, "select * from client_details where client_id = ? and client_secret = ?", clientId, clientSecret)
@@ -42,10 +49,12 @@ func (service *PostgresClientDetailsService) GetClientDetailByClientId(ctx conte
 	return &clientDetails, nil
 }
 
+// InMemoryClientDetailsService 内存中的客户端详细信息服务
 type InMemoryClientDetailsService struct {
 	clientDetailsDict map[string]*model.ClientDetails
 }
 
+// GetClientDetailByClientId 根据客户端ID和客户端密钥获取客户端详细信息
 func (service *InMemoryClientDetailsService) GetClientDetailByClientId(ctx context.Context, clientId string, clientSecret string) (*model.ClientDetails, error) {
 	// 根据 clientId 获取 clientDetails
 	clientDetails, ok := service.clientDetailsDict[clientId]
@@ -59,5 +68,4 @@ func (service *InMemoryClientDetailsService) GetClientDetailByClientId(ctx conte
 	} else {
 		return nil, ErrClientNotExist
 	}
-
 }

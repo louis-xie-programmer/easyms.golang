@@ -1,40 +1,31 @@
 # EasyMS Makefile
 
-.PHONY: test test-cover build clean
+# Docker 相关变量
+DOCKER_COMPOSE := docker-compose
+DOCKER_DIR := deploy/docker
 
-# 运行所有测试
-test:
-	@echo "运行所有测试..."
-	ENV=test go test -v ./...
-
-# 运行测试并生成覆盖率报告
-test-cover:
-	@echo "运行测试并生成覆盖率报告..."
-	ENV=test go test -coverprofile=coverage.out ./...
-	go tool cover -html=coverage.out -o coverage.html
-	@echo "HTML格式的覆盖率报告已生成: coverage.html"
+.PHONY: build run stop clean fmt vet
 
 # 构建所有服务
 build:
 	@echo "构建所有服务..."
-	docker-compose build
+	cd $(DOCKER_DIR) && $(DOCKER_COMPOSE) -f docker-compose.yaml build
 
 # 启动所有服务
 run:
 	@echo "启动所有服务..."
-	docker-compose up -d
+	cd $(DOCKER_DIR) && $(DOCKER_COMPOSE) -f docker-compose.yaml up -d
 
 # 停止所有服务
 stop:
 	@echo "停止所有服务..."
-	docker-compose down
+	cd $(DOCKER_DIR) && $(DOCKER_COMPOSE) -f docker-compose.yaml down
 
 # 清理构建产物
 clean:
 	@echo "清理构建产物..."
 	go clean
-	rm -f coverage.out
-	rm -f coverage.html
+	rm -rf bin/
 
 # 格式化代码
 fmt:

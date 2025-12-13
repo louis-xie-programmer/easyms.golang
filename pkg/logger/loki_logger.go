@@ -1,12 +1,17 @@
-// loki.go 实现Loki日志后端
-
+// loki.go 实现Loki日志后端，包含：
+// - 结构化日志JSON序列化
+// - 批量推送至Loki服务
+// - 基础认证支持
+// - HTTP客户端配置
+// - 响应状态码验证
+// - 异步日志传输
 package logger
 
 import (
 	"bytes"
+	"easyms/pkg/entitis"
 	"encoding/json"
 	"fmt"
-	"github.com/louis-xie-programmer/easyms/pkg/config"
 	"net/http"
 	"strconv"
 )
@@ -20,6 +25,7 @@ type LokiLogger struct {
 }
 
 // Log 将日志条目发送到Loki日志系统
+// 将日志条目打包成Loki兼容的格式并通过HTTP发送
 // 参数:
 //
 //	logs: 要发送的日志条目切片，包含模块、级别、消息等信息
@@ -33,13 +39,15 @@ type LokiLogger struct {
 // 2. 转换日志条目为Loki所需的格式
 // 3. 创建并发送包含认证信息的HTTP请求
 // 4. 处理响应结果及可能的错误
-func (l *LokiLogger) Log(logs []LogEntry) error {
+func (l *LokiLogger) Log(logs []entitis.LogEntry) error {
 	// 初始化Loki日志流结构
+	// Loki要求特定的流格式，包含标签和值
 	stream := struct {
 		Stream map[string]string `json:"stream"`
 		Values [][]string        `json:"values"`
 	}{}
 	// 设置服务标识为日志标签
+	// 用于在Loki中区分不同服务的日志
 	stream.Stream = map[string]string{
 		"app": l.service,
 	}
@@ -64,6 +72,7 @@ func (l *LokiLogger) Log(logs []LogEntry) error {
 	}
 
 	// 构建请求体结构
+	// Loki API要求特定的请求体格式
 	reqBody := struct {
 		Streams []interface{} `json:"streams"`
 	}{
@@ -77,14 +86,14 @@ func (l *LokiLogger) Log(logs []LogEntry) error {
 		return err
 	}
 
-	fmt.Printf("jsonBody: %s", jsonBody)
-
 	// 创建HTTP POST请求
+	// 向Loki推送日志数据
 	req, err := http.NewRequest("POST", l.url, bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return err
 	}
 	// 添加基础认证信息
+	// 使用用户名和密码进行身份验证
 	req.SetBasicAuth(l.username, l.password)
 	// 设置请求内容类型
 	req.Header.Set("Content-Type", "application/json")
@@ -101,6 +110,7 @@ func (l *LokiLogger) Log(logs []LogEntry) error {
 	defer resp.Body.Close()
 
 	// 验证响应状态码是否为预期的成功状态
+	// Loki成功响应状态码为204 No Content
 	if resp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
@@ -109,6 +119,7 @@ func (l *LokiLogger) Log(logs []LogEntry) error {
 }
 
 // NewLokiLogger 创建并返回一个新的LokiLogger实例
+// 初始化Loki日志记录器，配置连接参数
 // 参数:
 //
 //	service: 服务名称，用于标识日志来源(app 服务名称)
@@ -119,11 +130,11 @@ func (l *LokiLogger) Log(logs []LogEntry) error {
 //	*LokiLogger: 初始化后的LokiLogger指针
 //
 // 初始化结构体字段并配置HTTP客户端，设置5秒超时限制
-func NewLokiLogger(service string, cfg config.AppConfig) *LokiLogger {
+func NewLokiLogger(service string, cfg entitis.LokiConfig) *LokiLogger {
 	return &LokiLogger{
-		url:      cfg.Loki["Url"],
+		url:      cfg.URL,
 		service:  service,
-		username: cfg.Loki["username"],
-		password: cfg.Loki["password"],
+		username: cfg.Username,
+		password: cfg.Password,
 	}
 }

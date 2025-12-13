@@ -2,22 +2,24 @@ package service
 
 import (
 	"context"
+	"easyms/cmd/auth-svc/model"
+	"easyms/pkg/db"
 	"errors"
-	"github.com/louis-xie-programmer/easyms/cmd/auth-svc/model"
-	"github.com/louis-xie-programmer/easyms/pkg/db"
 )
 
 var (
+	// ErrUserNotExist 用户不存在
 	ErrUserNotExist = errors.New("username is not exist")
-	ErrPassword     = errors.New("invalid password")
+	// ErrPassword 密码错误
+	ErrPassword = errors.New("invalid password")
 )
 
-// Service Define a service interface
 type UserDetailsService interface {
-	// Get UserDetails By username
+	// GetUserDetailByUsername 根据用户名和密码获取用户详情
 	GetUserDetailByUsername(ctx context.Context, username, password string) (*model.UserDetails, error)
 }
 
+// PostgresUserDetailsService postgres用户详情服务
 type PostgresUserDetailsService struct {
 	db *db.EasyDatabase
 }
@@ -43,7 +45,7 @@ func (service *PostgresUserDetailsService) GetUserDetailByUsername(ctx context.C
 	return &userDetails, nil
 }
 
-// UserService implement Service interface
+// InMemoryUserDetailsService 内存用户详情服务
 type InMemoryUserDetailsService struct {
 	userDetailsDict map[string]*model.UserDetails
 }

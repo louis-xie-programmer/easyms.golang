@@ -1,0 +1,6 @@
+env: dev
+store_type: local
+consul:
+  host: "localhost:8500"
+  key_path: easyms/%s/%s
+  reload_on_changes: true

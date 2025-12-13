@@ -2,7 +2,7 @@ package service
 
 import (
 	"context"
-	. "github.com/louis-xie-programmer/easyms/cmd/auth-svc/model"
+	. "easyms/cmd/auth-svc/model"
 	"net/http"
 )
 
@@ -29,5 +29,6 @@ func (tokenGranter *RefreshTokenGranter) Grant(ctx context.Context, grantType st
 		return nil, ErrInvalidTokenRequest
 	}
 
+	// 刷新令牌
 	return tokenGranter.tokenService.RefreshAccessToken(refreshTokenValue)
 }

@@ -2,11 +2,12 @@ package service
 
 import (
 	"context"
-	. "github.com/louis-xie-programmer/easyms/cmd/auth-svc/model"
+	. "easyms/cmd/auth-svc/model"
 	"net/http"
 )
 
 type TokenGranter interface {
+	// Grant 用于生成令牌
 	Grant(ctx context.Context, grantType string, client *ClientDetails, reader *http.Request) (*OAuth2Token, error)
 }
 
@@ -21,7 +22,7 @@ func NewComposeTokenGranter(tokenGrantDict map[string]TokenGranter) TokenGranter
 }
 
 func (tokenGranter *ComposeTokenGranter) Grant(ctx context.Context, grantType string, client *ClientDetails, reader *http.Request) (*OAuth2Token, error) {
-
+	// 查找对应的授权类型处理器
 	dispatchGranter := tokenGranter.TokenGrantDict[grantType]
 
 	if dispatchGranter == nil {

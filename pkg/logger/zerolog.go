@@ -1,11 +1,15 @@
-// zerolog_logger.go - 本地文件日志记录实现
-//
-// 该文件实现了基于 zerolog 的本地文件日志记录功能，包含日志轮转、异步写入、
-// 日志级别控制等功能。主要结构体为 ZerologLogger。
-
+// zerolog_logger.go 实现本地文件日志记录
+// 主要特性：
+// - 基于zerolog的结构化输出
+// - 按天分割的日志轮转
+// - lumberjack日志切割（大小/数量/时间）
+// - 动态日志级别控制
+// - 服务标识与模块分类
+// - 异步日志写入
 package logger
 
 import (
+	"easyms/pkg/entitis"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +22,8 @@ import (
 
 // ZerologLogger 实现本地文件日志记录
 // 提供日志轮转、异步写入、多级日志控制等功能
+// 使用lumberjack实现日志文件的自动轮转
+// 支持按天分割日志文件
 type ZerologLogger struct {
 	service     string             // 服务名称，用于日志标记
 	logLevel    string             // 当前日志级别
@@ -86,7 +92,7 @@ func (z *ZerologLogger) rotateLogger() {
 		MaxSize:    10,      // 每个日志文件最大10MB
 		MaxBackups: 5,       // 保留5个旧日志文件
 		MaxAge:     7,       // 日志文件保留7天
-		Compress:   false,   // 不压缩旧日志
+		Compress:   false,   // 不压缩旧日志，节省CPU资源
 	}
 
 	zerolog.TimeFieldFormat = time.RFC3339
@@ -112,10 +118,11 @@ func (z *ZerologLogger) rotateLogger() {
 }
 
 // writeLog 写入日志条目
+// 根据日志级别将日志条目写入相应的输出
 // 参数:
 //
 //	entry - 日志条目
-func (z *ZerologLogger) writeLog(entry LogEntry) {
+func (z *ZerologLogger) writeLog(entry entitis.LogEntry) {
 	event := z.logger.With().
 		Str("app", entry.Service).
 		Str("module", entry.Module).
@@ -137,10 +144,11 @@ func (z *ZerologLogger) writeLog(entry LogEntry) {
 }
 
 // Log 实现Logger接口的日志记录方法
+// 批量处理日志条目，根据日志级别过滤并写入日志
 // 参数:
 //
 //	logs - 日志条目
-func (l *ZerologLogger) Log(logs []LogEntry) error {
+func (l *ZerologLogger) Log(logs []entitis.LogEntry) error {
 	for _, entry := range logs {
 		if !shouldLog(entry.Level) {
 			continue

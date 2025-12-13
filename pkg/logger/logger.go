@@ -1,29 +1,36 @@
 // logger.go 提供统一日志抽象接口和异步处理框架
-
+// 主要功能：
+// - 支持多后端输出（Loki/Zerolog）
+// - 异步批量处理（5秒/10条触发）
+// - 线程安全的通道通信
+// - 优雅关闭机制
+// - 全局日志级别控制
+// - 结构化日志记录
 package logger
 
 import (
+	"easyms/pkg/entitis"
 	"fmt"
-	"github.com/louis-xie-programmer/easyms/pkg/config"
 	"strings"
 	"sync"
 	"time"
 )
 
 // Logger 定义日志记录器接口
+// 所有具体的日志实现都需要实现此接口
 type Logger interface {
-	Log(logs []LogEntry) error
+	Log(logs []entitis.LogEntry) error  // 批量记录日志条目
 }
 
-var loggerImpl Logger
-var defaultService string
-var minLogLevel string
+var loggerImpl Logger          // 全局日志实现
+var defaultService string      // 默认服务名称
+var minLogLevel string         // 最小日志级别
 
 // 全局日志通道和管理器
 var (
-	logChan   = make(chan LogEntry, 1000) // 日志处理通道
-	closeChan = make(chan struct{})       // 关闭通知通道
-	wg        sync.WaitGroup              // worker管理器
+	logChan   = make(chan entitis.LogEntry, 1000) // 日志处理通道，缓冲区大小为1000
+	closeChan = make(chan struct{})               // 关闭通知通道
+	wg        sync.WaitGroup                      // worker管理器，用于等待所有日志处理完成
 )
 
 func shouldLog(level string) bool {
@@ -31,6 +38,8 @@ func shouldLog(level string) bool {
 }
 
 // Init 初始化日志系统
+// 初始化日志系统，包括设置服务名称、日志级别和日志实现
+// 同时启动后台日志处理协程
 // 参数:
 //
 //	service: 服务名称，用于标识日志来源
@@ -40,16 +49,16 @@ func shouldLog(level string) bool {
 // 1. 设置全局服务名称和日志级别
 // 2. 根据配置创建对应的日志实现
 // 3. 启动日志处理协程
-func Init(service string, cfg *config.AppConfig) {
+func Init(service string, cfg *entitis.AppConfig) {
 	// 初始化全局服务名称和日志级别
 	defaultService = service
-	minLogLevel = strings.ToLower(cfg.Log["log_level"])
+	minLogLevel = strings.ToLower(cfg.Log.LogLevel)
 
 	// 根据配置创建不同的日志实现
-	switch strings.ToLower(minLogLevel) {
+	switch strings.ToLower(cfg.Log.LogType) {
 	case "loki":
 		// 使用Loki日志系统
-		loggerImpl = NewLokiLogger(service, *cfg)
+		loggerImpl = NewLokiLogger(service, cfg.Loki)
 	default:
 		// 默认使用Zerolog日志系统
 		loggerImpl = NewZerologLogger(service, minLogLevel)
@@ -70,7 +79,7 @@ func logProcessor() {
 	defer wg.Done()
 
 	// 初始化日志缓冲区和定时器（5秒刷新间隔）
-	var logs []LogEntry
+	var logs []entitis.LogEntry
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -84,6 +93,7 @@ func logProcessor() {
 		case entry := <-logChan:
 			logs = append(logs, entry)
 			// 达到批量容量时写入
+			// 批量处理提高性能，减少I/O操作
 			if len(logs) >= 10 {
 				err := loggerImpl.Log(logs)
 				if err != nil {
@@ -91,7 +101,15 @@ func logProcessor() {
 				}
 				logs = nil
 			}
-
+		case <-ticker.C: // 定时触发写入
+			// 定时刷新确保日志及时写入，避免数据丢失
+			if len(logs) > 0 {
+				err := loggerImpl.Log(logs)
+				if err != nil {
+					fmt.Println("Failed to log:", err)
+				}
+				logs = nil
+			}
 		// 处理关闭信号
 		case <-closeChan:
 			// 刷写剩余日志
@@ -108,6 +126,7 @@ func logProcessor() {
 }
 
 // Shutdown 优雅关闭日志系统
+// 发送关闭信号并等待所有日志处理完成
 func Shutdown() {
 	close(closeChan)
 	wg.Wait()
@@ -115,7 +134,7 @@ func Shutdown() {
 
 // Info 记录信息日志
 func Info(msg, module string, extra [][]string) {
-	logChan <- LogEntry{
+	logChan <- entitis.LogEntry{
 		Service:   defaultService,
 		Module:    module,
 		Timestamp: time.Now(),
@@ -127,7 +146,7 @@ func Info(msg, module string, extra [][]string) {
 
 // Error 记录错误日志
 func Error(err error, msg, module string, extra [][]string) {
-	logChan <- LogEntry{
+	logChan <- entitis.LogEntry{
 		Service:   defaultService,
 		Module:    module,
 		Timestamp: time.Now(),
@@ -140,7 +159,7 @@ func Error(err error, msg, module string, extra [][]string) {
 
 // Warn 记录警告日志
 func Warn(msg, module string, extra [][]string) {
-	logChan <- LogEntry{
+	logChan <- entitis.LogEntry{
 		Service:   defaultService,
 		Module:    module,
 		Timestamp: time.Now(),
@@ -152,7 +171,7 @@ func Warn(msg, module string, extra [][]string) {
 
 // Debug 记录调试日志
 func Debug(msg, module string, extra [][]string) {
-	logChan <- LogEntry{
+	logChan <- entitis.LogEntry{
 		Service:   defaultService,
 		Module:    module,
 		Timestamp: time.Now(),

@@ -1,186 +1,55 @@
+// main.go API网关服务主程序
+// 主要功能：
+// 1. 初始化服务配置
+// 2. 启动服务发现客户端
+// 3. 监听目标服务
+// 4. 启动HTTP服务
+// 5. 提供反向代理和负载均衡功能
 package main
 
 import (
-	"context"
-	"errors"
+	"easyms/pkg/config"
+	"easyms/pkg/discovery"
+	"easyms/pkg/gateway"
+	"easyms/pkg/logger"
 	"fmt"
-	"github.com/louis-xie-programmer/easyms/pkg/config"
-	"github.com/louis-xie-programmer/easyms/pkg/logger"
-	"io"
-	"log"
 	"net/http"
-	"net/url"
-	"sync"
-	"time"
-
-	"github.com/go-chi/chi/v5"
-	"github.com/go-kit/kit/endpoint"
-	"github.com/go-kit/kit/sd"
-	kitconsul "github.com/go-kit/kit/sd/consul"
-	"github.com/go-kit/kit/sd/lb"
-	"github.com/hashicorp/consul/api"
-	"github.com/mercari/go-circuitbreaker"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-
-	"github.com/louis-xie-programmer/easyms/pkg/auth"
 )
 
-var (
-	cbStates = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "circuit_breaker_state",
-		Help: "Circuit breaker state per instance (0=closed,1=halfopen,2=open)",
-	}, []string{"instance"})
-)
-
-func init() { prometheus.MustRegister(cbStates) }
-
-var (
-	breakers = map[string]*circuitbreaker.CircuitBreaker{}
-	cbMutex  sync.RWMutex
-)
-
-func getBreaker(instance string) *circuitbreaker.CircuitBreaker {
-	cbMutex.RLock()
-	br, ok := breakers[instance]
-	cbMutex.RUnlock()
-	if ok {
-		return br
-	}
-	cbMutex.Lock()
-	defer cbMutex.Unlock()
-	if br, ok = breakers[instance]; ok {
-		return br
-	}
-	br = circuitbreaker.New(
-		circuitbreaker.WithCounterResetInterval(10*time.Second),
-		circuitbreaker.WithHalfOpenMaxSuccesses(4),
-		circuitbreaker.WithTripFunc(circuitbreaker.NewTripFuncFailureRate(10, 0.4)),
-		circuitbreaker.WithFailOnContextCancel(true),
-		circuitbreaker.WithOnStateChangeHookFn(func(from, to circuitbreaker.State) {
-			log.Printf("[CB][%s] %s -> %s", instance, from, to)
-			switch to {
-			case circuitbreaker.StateClosed:
-				cbStates.WithLabelValues(instance).Set(0)
-			case circuitbreaker.StateHalfOpen:
-				cbStates.WithLabelValues(instance).Set(1)
-			case circuitbreaker.StateOpen:
-				cbStates.WithLabelValues(instance).Set(2)
-			}
-		}),
-	)
-	breakers[instance] = br
-	return br
-}
-
+// main API网关服务入口函数
 func main() {
-	appConfig, err := config.LoadAppConfig()
+	// 获取环境变量
+	// 网关服务名称和端口
+	serverName := "gateway"
+	port := 10001
+
+	// 初始化应用配置存储
+	// 读取 configs/app.yaml 配置文件
+	cfgStore, err := config.InitAppConfigStore()
 	if err != nil {
-		log.Fatal(err)
+		logger.Error(err, "Failed to initialize app config store", serverName, nil)
 	}
 
-	logger.Init("user-svc", appConfig)
-
-	consulAddr := appConfig.Consul.Host
-	if consulAddr == "" {
-		consulAddr = "127.0.0.1:8500"
-	}
-
-	loader, _ := config.NewServiceConfigLoader(appConfig, "user-svc")
-	svcCfg := loader.GetConfig()
-
-	addr := ":10001"
-	authUrl := ""
-	svr := svcCfg["server"].(map[string]interface{})
-	if svr != nil {
-		addr = fmt.Sprintf("%s:%v", svr["host"].(string), svr["port"].(string))
-		authUrl = svr["auth_url"].(string)
-	}
-
-	validator, err := auth.NewValidator(consulAddr, authUrl)
+	// 初始化 Consul 服务发现客户端
+	// 连接到Consul服务注册与发现中心
+	sd, err := discovery.NewServiceDiscovery(cfgStore.Consul.Host)
 	if err != nil {
-		logger.Error(err, "auth validator error", "main", [][]string{{"msg", "auth.NewValidator"}})
+		logger.Error(err, "Failed to create consul client", serverName, nil)
 	}
 
-	cfg := api.DefaultConfig()
-	cfg.Address = consulAddr
-	consulClient, err := api.NewClient(cfg)
-	if err != nil {
-		logger.Error(err, "consul client error", "main", [][]string{{"msg", "api.NewClient"}})
-	}
+	// 监听多个服务的变化
+	// 启动goroutine监听user-svc和auth-svc服务实例变化
+	sd.WatchService("user-svc")
+	sd.WatchService("auth-svc")
 
-	easyLog := logger.NewKitLoggerAdapter()
+	// 创建API网关实例
+	// 初始化网关，传入服务发现客户端
+	gw := gateway.NewGateway(sd)
 
-	instancer := kitconsul.NewInstancer(kitconsul.NewClient(consulClient), easyLog, "user-svc", []string{}, true)
-
-	factory := func(instance string) (endpoint.Endpoint, io.Closer, error) {
-		target, err := url.Parse("http://" + instance)
-		if err != nil {
-			return nil, nil, err
-		}
-		br := getBreaker(instance)
-
-		ep := func(ctx context.Context, _ interface{}) (interface{}, error) {
-			ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-			defer cancel()
-
-			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, target.String()+"/v1/profile", nil)
-			if authz := ctx.Value("authz"); authz != nil {
-				req.Header.Set("Authorization", authz.(string))
-			}
-
-			return br.Do(ctx, func() (interface{}, error) {
-				res, err := http.DefaultClient.Do(req)
-				if err != nil {
-					return nil, err
-				}
-				defer res.Body.Close()
-				body, _ := io.ReadAll(res.Body)
-				if res.StatusCode >= 500 {
-					return nil, fmt.Errorf("backend %d: %s", res.StatusCode, string(body))
-				}
-				return body, nil
-			})
-		}
-		return ep, nil, nil
-	}
-
-	endpointer := sd.NewEndpointer(instancer, factory, easyLog)
-	rr := lb.NewRoundRobin(endpointer)
-
-	r := chi.NewRouter()
-	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
-	r.Handle("/metrics", promhttp.Handler())
-
-	r.Group(func(pr chi.Router) {
-		pr.Use(validator.Middleware)
-		pr.Get("/api/profile", func(w http.ResponseWriter, r *http.Request) {
-			ep, err := rr.Endpoint()
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusServiceUnavailable)
-				return
-			}
-			ctx := context.WithValue(r.Context(), "authz", r.Header.Get("Authorization"))
-			resp, err := ep(ctx, nil)
-			if err != nil {
-				if errors.Is(err, circuitbreaker.ErrOpen) {
-					w.Header().Set("X-CB-State", "open")
-					http.Error(w, "circuit open", http.StatusServiceUnavailable)
-					return
-				}
-				http.Error(w, err.Error(), http.StatusBadGateway)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.Write(resp.([]byte))
-		})
-	})
-
-	logger.Info("api-gateway starting", "main", [][]string{{"msg", "api-gateway starting"}})
-
-	err = http.ListenAndServe(addr, r)
-
-	if err != nil {
-		logger.Error(err, "listen error", "main", [][]string{{"msg", "listen error"}})
+	// 启动HTTP服务
+	// 启动网关HTTP服务，监听指定端口
+	fmt.Printf("Starting %s on port %d\n", serverName, port)
+	if err := http.ListenAndServe(fmt.Sprintf(":%d", port), gw); err != nil {
+		fmt.Printf("Failed to start %s: %v\n", serverName, err)
 	}
 }

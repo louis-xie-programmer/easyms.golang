@@ -6,15 +6,15 @@ import (
 
 type UserDetails struct {
 	// 用户标识
-	UserId int64
+	UserId int64 `json:"userId" gorm:"primaryKey;autoIncrement"`
 	// 用户名 唯一
-	Username string
+	Username string `json:"username" gorm:"varchar(64);not null"`
 	// 用户密码（明文，不存储到数据库）
-	Password string
+	Password string `json:"-" gorm:"-"`
 	// 用户密码哈希值（存储到数据库）
-	PasswordHash string
+	PasswordHash string `json:"passwordHash" gorm:"varchar(128);not null"`
 	// 用户具有的权限
-	Authorities []string // 具备的权限
+	Authorities []string `json:"authorities" gorm:"type:varchar[]"`
 }
 
 // HashPassword 使用bcrypt哈希密码

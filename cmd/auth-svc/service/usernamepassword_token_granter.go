@@ -2,7 +2,7 @@ package service
 
 import (
 	"context"
-	. "github.com/louis-xie-programmer/easyms/cmd/auth-svc/model"
+	. "easyms/cmd/auth-svc/model"
 	"net/http"
 )
 

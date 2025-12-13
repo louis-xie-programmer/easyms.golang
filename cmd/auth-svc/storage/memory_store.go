@@ -2,8 +2,8 @@ package storage
 
 import (
 	"context"
+	model2 "easyms/cmd/auth-svc/model"
 	"errors"
-	model2 "github.com/louis-xie-programmer/easyms/cmd/auth-svc/model"
 )
 
 type InMemoryStore struct {
@@ -20,10 +20,12 @@ func (s *InMemoryStore) GetClient(_ context.Context, id string) (*model2.ClientD
 }
 
 func (s *InMemoryStore) GetUserByPassword(_ context.Context, username, password string) (*model2.UserDetails, error) {
-	for _, u := range s.Users {
-		if u.Username == username && u.Password == password {
-			return u, nil
-		}
+	user := s.Users[username]
+	if user == nil {
+		return nil, errors.New("invalid credentials")
 	}
-	return nil, errors.New("invalid credentials")
+	if user.Password != password {
+		return nil, errors.New("invalid credentials")
+	}
+	return user, nil
 }

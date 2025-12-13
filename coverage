@@ -1,6 +1,0 @@
-mode: set
-github.com/louis-xie-programmer/easyms/cmd/auth-svc/model/token.go:16.50,19.2 1 1
-github.com/louis-xie-programmer/easyms/cmd/auth-svc/model/user.go:21.44,23.16 2 1
-github.com/louis-xie-programmer/easyms/cmd/auth-svc/model/user.go:23.16,25.3 1 0
-github.com/louis-xie-programmer/easyms/cmd/auth-svc/model/user.go:26.2,27.12 2 1
-github.com/louis-xie-programmer/easyms/cmd/auth-svc/model/user.go:31.59,34.2 2 1

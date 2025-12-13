@@ -1,10 +1,11 @@
-# syntax=docker/dockerfile:1
-FROM golang:1.22-alpine AS build
+FROM golang:1.25.2 AS builder
 WORKDIR /src
 COPY . .
-RUN apk add --no-cache git ca-certificates &&     CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/service ./cmd/api-gateway
+# Build -s 去除符号表 -w 去除debug调试信息，减少二进制文件大小
+RUN apk add --no-cache git ca-certificates && CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/service ./cmd/api-gateway
 
 FROM scratch
-COPY --from=build /bin/service /bin/service
-EXPOSE 8082
+#COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=builder /bin/service /bin/service
+EXPOSE 10000
 ENTRYPOINT ["/bin/service"]

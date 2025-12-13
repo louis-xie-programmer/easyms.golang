@@ -1,0 +1,24 @@
+log:
+  log_type: local
+  log_level: debug
+server:
+  host: "172.29.16.1"
+  port: 10002
+auth:
+  client_id: "easyms_client"
+  client_secret: "secret_key"
+database:
+  type: postgres
+  host: 172.29.16.1
+  port: 5432
+  user: easy
+  password: easypass
+  database: easydb
+  # 连接池配置
+  max_idle_conns: 10
+  max_open_conns: 100
+  conn_max_lifetime: 3600
+redis:
+  address: "172.29.16.1:6379"
+  password: "123456"
+  db: 0
