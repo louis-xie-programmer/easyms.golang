@@ -8,11 +8,12 @@
 package config
 
 import (
+	"easyms/pkg/discovery"
 	"easyms/pkg/entitis"
 	"fmt"
+	"gopkg.in/yaml.v2"
 	"io/ioutil"
 	"time"
-	"gopkg.in/yaml.v2"
 )
 
 var (
@@ -47,14 +48,14 @@ func InitAppConfigStore() (*entitis.AppConfigStore, error) {
 		fmt.Println("Failed to read app config file")
 		return nil, err
 	}
-	
+
 	// 解析 YAML 格式的配置文件
 	var cfg entitis.AppConfigStore
 	err = yaml.Unmarshal(data, &cfg)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return &cfg, nil
 }
 
@@ -65,6 +66,7 @@ func InitAppConfigStore() (*entitis.AppConfigStore, error) {
 //   - serverName: 服务名称
 //   - env: 环境
 //   - description: 版本描述
+//
 // 返回值:
 //   - string: 版本ID
 //   - error: 操作成功返回nil，失败返回具体错误
@@ -74,16 +76,16 @@ func SaveConfigVersion(d *discovery.Discovery, serverName, env, description stri
 	if currentConfig == nil {
 		return "", fmt.Errorf("current config is nil")
 	}
-	
+
 	// 序列化配置
 	configData, err := yaml.Marshal(currentConfig)
 	if err != nil {
 		return "", err
 	}
-	
+
 	// 生成版本ID
 	versionID := fmt.Sprintf("%s-%d", serverName, time.Now().Unix())
-	
+
 	// 创建版本信息
 	versionInfo := entitis.ConfigVersion{
 		VersionID:   versionID,
@@ -91,20 +93,20 @@ func SaveConfigVersion(d *discovery.Discovery, serverName, env, description stri
 		Description: description,
 		ConfigData:  string(configData),
 	}
-	
+
 	// 序列化版本信息
 	versionData, err := yaml.Marshal(versionInfo)
 	if err != nil {
 		return "", err
 	}
-	
+
 	// 保存到Consul
 	key := fmt.Sprintf("easyms/versions/%s/%s/%s", env, serverName, versionID)
 	err = d.Put(key, string(versionData))
 	if err != nil {
 		return "", err
 	}
-	
+
 	return versionID, nil
 }
 
@@ -113,19 +115,20 @@ func SaveConfigVersion(d *discovery.Discovery, serverName, env, description stri
 //   - d: Consul客户端
 //   - serverName: 服务名称
 //   - env: 环境
+//
 // 返回值:
 //   - []*entitis.ConfigVersion: 配置版本列表
 //   - error: 操作成功返回nil，失败返回具体错误
 func GetConfigVersions(d *discovery.Discovery, serverName, env string) ([]*entitis.ConfigVersion, error) {
 	// 构建键前缀
 	prefix := fmt.Sprintf("easyms/versions/%s/%s/", env, serverName)
-	
+
 	// 获取所有版本键
 	keys, err := d.ListKeys(prefix)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// 获取所有版本信息
 	versions := make([]*entitis.ConfigVersion, 0, len(keys))
 	for _, key := range keys {
@@ -133,16 +136,16 @@ func GetConfigVersions(d *discovery.Discovery, serverName, env string) ([]*entit
 		if err != nil {
 			return nil, err
 		}
-		
+
 		var version entitis.ConfigVersion
 		err = yaml.Unmarshal([]byte(val), &version)
 		if err != nil {
 			return nil, err
 		}
-		
+
 		versions = append(versions, &version)
 	}
-	
+
 	return versions, nil
 }
 
@@ -152,6 +155,7 @@ func GetConfigVersions(d *discovery.Discovery, serverName, env string) ([]*entit
 //   - serverName: 服务名称
 //   - env: 环境
 //   - versionID: 版本ID
+//
 // 返回值:
 //   - error: 操作成功返回nil，失败返回具体错误
 func RollbackToVersion(d *discovery.Discovery, serverName, env, versionID string) error {
@@ -161,13 +165,13 @@ func RollbackToVersion(d *discovery.Discovery, serverName, env, versionID string
 	if err != nil {
 		return err
 	}
-	
+
 	var version entitis.ConfigVersion
 	err = yaml.Unmarshal([]byte(val), &version)
 	if err != nil {
 		return err
 	}
-	
+
 	// 将配置数据写入当前配置键
 	configKey := fmt.Sprintf("easyms/%s/%s.yaml", env, serverName)
 	return d.Put(configKey, version.ConfigData)

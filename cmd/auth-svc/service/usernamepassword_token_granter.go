@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	. "easyms/cmd/auth-svc/model"
-	"net/http"
 )
 
 type UsernamePasswordTokenGranter struct {
@@ -21,20 +20,15 @@ func NewUsernamePasswordTokenGranter(grantType string, userDetailsService UserDe
 }
 
 func (tokenGranter *UsernamePasswordTokenGranter) Grant(ctx context.Context,
-	grantType string, client *ClientDetails, reader *http.Request) (*OAuth2Token, error) {
+	grantType string, client *ClientDetails, reader *TokenRequest) (*OAuth2Token, error) {
 	if grantType != tokenGranter.supportGrantType {
 		return nil, ErrNotSupportGrantType
 	}
-	// 从请求体中获取用户名密码
-	username := reader.FormValue("username")
-	password := reader.FormValue("password")
 
-	if username == "" || password == "" {
-		return nil, ErrInvalidUsernameAndPasswordRequest
-	}
+	userDetailsService := tokenGranter.userDetailsService.(*PostgresUserDetailsService)
 
 	// 验证用户名密码是否正确
-	userDetails, err := tokenGranter.userDetailsService.GetUserDetailByUsername(ctx, username, password)
+	userDetails, err := userDetailsService.GetUserDetailByUsername(ctx, reader.Username, reader.Password)
 
 	if err != nil {
 		return nil, ErrInvalidUsernameAndPasswordRequest

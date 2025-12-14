@@ -16,6 +16,7 @@ database:
   max_idle_conns: 10
   max_open_conns: 100
   conn_max_lifetime: 3600
+  conn_max_idle_time: 1800
 redis:
   address: "172.29.16.1:6379"
   password: "123456"

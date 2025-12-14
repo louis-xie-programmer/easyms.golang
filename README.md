@@ -218,6 +218,9 @@ go run cmd/migrate/main.go -database "postgres://user:password@host:port/dbname?
 # 回滚所有已执行的迁移
 go run cmd/migrate/main.go -database "postgres://user:password@host:port/dbname?sslmode=disable" -down
 
+# 使用 GORM 自动迁移（推荐用于开发环境）
+go run cmd/migrate/main.go -database "postgres://user:password@host:port/dbname?sslmode=disable" -auto
+
 # 指定迁移文件路径
 go run cmd/migrate/main.go -path "./migrations" -database "postgres://user:password@host:port/dbname?sslmode=disable" -up
 ```
@@ -281,11 +284,8 @@ docker-compose up -d
 ### 1. 构建相关命令
 
 ```bash
-# 构建所有服务
+# 构建所有服务的 Docker 镜像
 make build
-
-# 构建指定服务
-make build-auth-svc
 
 # 清理构建产物
 make clean
@@ -294,66 +294,35 @@ make clean
 ### 2. 运行相关命令
 
 ```bash
-# 运行所有服务
+# 启动所有服务
 make run
 
-# 运行指定服务
-make run-auth-svc
+# 停止所有服务
+make stop
 ```
 
-### 3. 测试和质量保证
+### 3. 代码质量相关命令
 
 ```bash
-# 运行所有测试
-make test
-
 # 格式化代码
 make fmt
 
-# 检查代码质量问题
+# 检查代码问题
 make vet
-
-# 检查代码风格
-make lint
 ```
 
-### 4. Docker 相关命令
+### 4. 数据库迁移
 
 ```bash
-# 启动 Docker 环境
-make docker-up
-
-# 停止 Docker 环境
-make docker-down
-
-# 查看 Docker 服务状态
-make docker-status
+# 执行数据库自动迁移（使用 GORM AutoMigrate）
+make migrate
 ```
 
-### 5. 数据库迁移
-
-```bash
-# 应用数据库迁移（需要设置 DATABASE_URL 环境变量）
-make migrate-up
-
-# 回滚数据库迁移（需要设置 DATABASE_URL 环境变量）
-make migrate-down
-```
-
-### 6. 其他命令
+### 5. 其他命令
 
 ```bash
 # 显示帮助信息
 make help
-
-# 生成代码文档
-make docs
-
-# 安装开发工具
-make install-tools
-
-# 显示项目版本信息
-make version
 ```
 
 ## 十、快速开始
@@ -412,14 +381,12 @@ configs/
 ### 3. 运行服务
 
 ```bash
-# 运行 API 网关
-go run cmd/api-gateway/main.go
+# 使用 Docker Compose 启动所有服务
+make run
 
-# 运行认证服务
-go run cmd/auth-svc/main.go
-
-# 运行用户服务
-go run cmd/user-svc/main.go
+# 或者手动启动
+cd deploy/docker
+docker-compose up -d
 ```
 
 ## 十一、技术栈
@@ -455,6 +422,12 @@ go run cmd/user-svc/main.go
 ## 十三、部署指南
 
 使用 Docker Compose 快速部署整套系统：
+
+```bash
+make run
+```
+
+或者手动执行：
 
 ```bash
 cd deploy/docker

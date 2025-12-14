@@ -1,6 +1,7 @@
 package entitis
 
 import (
+	"fmt"
 	"net"
 	"regexp"
 	"sync"
@@ -41,11 +42,38 @@ type AppConfig struct {
 	OAuth2 OAuth2Config `yaml:"oauth2"`
 }
 
+// Validate 验证 AppConfig 配置的有效性
+func (c *AppConfig) Validate() error {
+	if err := c.Server.Validate(); err != nil {
+		return fmt.Errorf("server config validation failed: %w", err)
+	}
+
+	if err := c.Database.Validate(); err != nil {
+		return fmt.Errorf("database config validation failed: %w", err)
+	}
+
+	if c.RateLimit != nil {
+		if err := c.RateLimit.Validate(); err != nil {
+			return fmt.Errorf("rate limit config validation failed: %w", err)
+		}
+	}
+
+	return nil
+}
+
 // ServerConfig 定义服务器配置
 type ServerConfig struct {
 	Host string    `yaml:"host"`
 	Port int       `yaml:"port"`
 	Tls  TLSConfig `yaml:"tls"`
+}
+
+// Validate 验证 ServerConfig 配置的有效性
+func (s *ServerConfig) Validate() error {
+	if s.Port <= 0 || s.Port > 65535 {
+		return fmt.Errorf("invalid server port: %d, port must be between 1 and 65535", s.Port)
+	}
+	return nil
 }
 
 // TLSConfig 配置TLS
@@ -87,16 +115,72 @@ type DatabaseConfig struct {
 	Password string `yaml:"password"`
 	Database string `yaml:"database"`
 	// 连接池配置
-	MaxIdleConns    int `yaml:"max_idle_conns"`    // 最大空闲连接数
-	MaxOpenConns    int `yaml:"max_open_conns"`    // 最大打开连接数
-	ConnMaxLifetime int `yaml:"conn_max_lifetime"` // 连接最大生命周期(秒)
+	MaxIdleConns    int `yaml:"max_idle_conns"`     // 最大空闲连接数
+	MaxOpenConns    int `yaml:"max_open_conns"`     // 最大打开连接数
+	ConnMaxLifetime int `yaml:"conn_max_lifetime"`  // 连接最大生命周期(秒)
+	ConnMaxIdleTime int `yaml:"conn_max_idle_time"` // 连接最大空闲时间(秒)
 }
 
+// Validate 验证 DatabaseConfig 配置的有效性
+func (d *DatabaseConfig) Validate() error {
+	if d.Type == "" {
+		return fmt.Errorf("database type is required")
+	}
+
+	if d.Host == "" {
+		return fmt.Errorf("database host is required")
+	}
+
+	if d.Port <= 0 || d.Port > 65535 {
+		return fmt.Errorf("invalid database port: %d, port must be between 1 and 65535", d.Port)
+	}
+
+	if d.UserName == "" {
+		return fmt.Errorf("database username is required")
+	}
+
+	if d.Database == "" {
+		return fmt.Errorf("database name is required")
+	}
+
+	return nil
+}
+
+// RateLimitConfig 限流配置
 type RateLimitConfig struct {
 	IPLimits     []IPLimitRule `yaml:"ip_limits" json:"ip_limits"`
 	UALimits     []UALimitRule `yaml:"ua_limits" json:"ua_limits"`
 	DefaultRate  float64       `yaml:"default_rate" json:"default_rate"`
 	DefaultBurst int           `yaml:"default_burst" json:"default_burst"`
+}
+
+// Validate 验证 RateLimitConfig 配置的有效性
+func (r *RateLimitConfig) Validate() error {
+	if r.DefaultRate < 0 {
+		return fmt.Errorf("default rate must be non-negative, got: %f", r.DefaultRate)
+	}
+
+	if r.DefaultBurst < 0 {
+		return fmt.Errorf("default burst must be non-negative, got: %d", r.DefaultBurst)
+	}
+
+	if r.DefaultBurst < int(r.DefaultRate) {
+		return fmt.Errorf("default burst (%d) must be greater than or equal to default rate (%f)", r.DefaultBurst, r.DefaultRate)
+	}
+
+	for i, rule := range r.IPLimits {
+		if err := rule.Validate(); err != nil {
+			return fmt.Errorf("ip limit rule #%d validation failed: %w", i+1, err)
+		}
+	}
+
+	for i, rule := range r.UALimits {
+		if err := rule.Validate(); err != nil {
+			return fmt.Errorf("ua limit rule #%d validation failed: %w", i+1, err)
+		}
+	}
+
+	return nil
 }
 
 type IPLimitRule struct {
@@ -106,12 +190,62 @@ type IPLimitRule struct {
 	Net   *net.IPNet
 }
 
+// Validate 验证 IPLimitRule 配置的有效性
+func (i *IPLimitRule) Validate() error {
+	if i.CIDR == "" {
+		return fmt.Errorf("cidr is required")
+	}
+
+	if _, _, err := net.ParseCIDR(i.CIDR); err != nil {
+		return fmt.Errorf("invalid cidr format: %s, error: %w", i.CIDR, err)
+	}
+
+	if i.Rate < 0 {
+		return fmt.Errorf("rate must be non-negative, got: %f", i.Rate)
+	}
+
+	if i.Burst < 0 {
+		return fmt.Errorf("burst must be non-negative, got: %d", i.Burst)
+	}
+
+	if i.Burst < int(i.Rate) {
+		return fmt.Errorf("burst (%d) must be greater than or equal to rate (%f)", i.Burst, i.Rate)
+	}
+
+	return nil
+}
+
 // UserAgent限流规则
 type UALimitRule struct {
 	Pattern string  `json:"pattern"`
 	Rate    float64 `json:"rate"`
 	Burst   int     `json:"burst"`
 	Regexp  *regexp.Regexp
+}
+
+// Validate 验证 UALimitRule 配置的有效性
+func (u *UALimitRule) Validate() error {
+	if u.Pattern == "" {
+		return fmt.Errorf("pattern is required")
+	}
+
+	if _, err := regexp.Compile(u.Pattern); err != nil {
+		return fmt.Errorf("invalid regex pattern: %s, error: %w", u.Pattern, err)
+	}
+
+	if u.Rate < 0 {
+		return fmt.Errorf("rate must be non-negative, got: %f", u.Rate)
+	}
+
+	if u.Burst < 0 {
+		return fmt.Errorf("burst must be non-negative, got: %d", u.Burst)
+	}
+
+	if u.Burst < int(u.Rate) {
+		return fmt.Errorf("burst (%d) must be greater than or equal to rate (%f)", u.Burst, u.Rate)
+	}
+
+	return nil
 }
 
 // ConfigVersion 配置版本信息

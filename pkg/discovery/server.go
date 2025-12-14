@@ -31,6 +31,13 @@ type ServiceDiscovery struct {
 
 	breakers   map[string]*gobreaker.CircuitBreaker  // 熔断器映射，key为服务名
 	breakerMtx sync.RWMutex                           // 熔断器读写锁
+	
+	// 负载均衡策略映射
+	loadBalancers map[string]LoadBalanceStrategy
+	lbMutex       sync.RWMutex
+	
+	// 健康检查管理器
+	healthManager *ServiceHealthManager
 }
 
 // NewServiceDiscovery 创建新的服务发现客户端
@@ -49,12 +56,50 @@ func NewServiceDiscovery(addr string) (*ServiceDiscovery, error) {
 		return nil, err
 	}
 
-	return &ServiceDiscovery{
-		client:   client,
-		services: make(map[string][]string),
-		lbIndex:  make(map[string]int),
-		breakers: make(map[string]*gobreaker.CircuitBreaker),
-	}, nil
+	// 创建健康检查器
+	healthChecker := NewHTTPHealthChecker(3*time.Second, "/health")
+	healthManager := NewServiceHealthManager(healthChecker)
+
+	sd := &ServiceDiscovery{
+		client:        client,
+		services:      make(map[string][]string),
+		lbIndex:       make(map[string]int),
+		breakers:      make(map[string]*gobreaker.CircuitBreaker),
+		loadBalancers: make(map[string]LoadBalanceStrategy),
+		healthManager: healthManager,
+	}
+
+	// 默认使用轮询负载均衡策略
+	sd.SetLoadBalancer("default", &RoundRobinLoadBalancer{})
+
+	return sd, nil
+}
+
+// SetLoadBalancer 为特定服务设置负载均衡策略
+func (sd *ServiceDiscovery) SetLoadBalancer(serviceName string, strategy LoadBalanceStrategy) {
+	sd.lbMutex.Lock()
+	defer sd.lbMutex.Unlock()
+	sd.loadBalancers[serviceName] = strategy
+}
+
+// GetLoadBalancer 获取服务的负载均衡策略
+func (sd *ServiceDiscovery) GetLoadBalancer(serviceName string) LoadBalanceStrategy {
+	sd.lbMutex.RLock()
+	defer sd.lbMutex.RUnlock()
+	
+	if lb, exists := sd.loadBalancers[serviceName]; exists {
+		return lb
+	}
+	
+	// 返回默认负载均衡策略
+	if lb, exists := sd.loadBalancers["default"]; exists {
+		return lb
+	}
+	
+	// 如果没有默认策略，创建一个轮询策略
+	defaultLB := &RoundRobinLoadBalancer{}
+	sd.loadBalancers["default"] = defaultLB
+	return defaultLB
 }
 
 // GetHealthyInstances 获取健康的服务实例
@@ -163,14 +208,17 @@ func (d *ServiceDiscovery) WatchService(serviceName string) {
 				d.services[serviceName] = addresses
 				d.lock.Unlock()
 
+				// 启动健康检查工作协程（如果还没有运行）
+				go d.healthManager.HealthCheckWorker(addresses, 10*time.Second)
+
 				log.Printf("Service [%s] refreshed: %v\n", serviceName, addresses)
 			}
 		}
 	}()
 }
 
-// GetService 获取服务实例（轮询负载均衡）
-// 使用轮询算法从服务实例列表中选择一个实例
+// GetService 获取服务实例（根据负载均衡策略）
+// 使用配置的负载均衡策略从服务实例列表中选择一个实例
 // 参数:
 //   - serviceName: 服务名称
 // 返回值:
@@ -184,15 +232,53 @@ func (d *ServiceDiscovery) GetService(serviceName string) string {
 		return ""
 	}
 
-	// 轮询选择服务实例
-	// 使用取模运算实现轮询算法，确保负载均匀分布
-	d.lock.Lock()
-	index := d.lbIndex[serviceName]
-	target := instances[index%len(instances)]  // 取模防止索引越界
-	d.lbIndex[serviceName] = index + 1
-	d.lock.Unlock()
+	// 过滤不健康的实例
+	healthyInstances := make([]string, 0)
+	for _, instance := range instances {
+		if d.healthManager.IsHealthy(instance) {
+			healthyInstances = append(healthyInstances, instance)
+		}
+	}
 
-	return target
+	if len(healthyInstances) == 0 {
+		// 如果没有健康实例，返回第一个实例（降级处理）
+		return instances[0]
+	}
+
+	// 使用配置的负载均衡策略选择服务实例
+	lb := d.GetLoadBalancer(serviceName)
+	return lb.Select(healthyInstances)
+}
+
+// GetServiceWithStrategy 使用指定策略获取服务实例
+// 参数:
+//   - serviceName: 服务名称
+//   - strategy: 负载均衡策略
+// 返回值:
+//   - string: 服务实例地址
+func (d *ServiceDiscovery) GetServiceWithStrategy(serviceName string, strategy LoadBalanceStrategy) string {
+	d.lock.RLock()
+	instances := d.services[serviceName]
+	d.lock.RUnlock()
+
+	if len(instances) == 0 {
+		return ""
+	}
+
+	// 过滤不健康的实例
+	healthyInstances := make([]string, 0)
+	for _, instance := range instances {
+		if d.healthManager.IsHealthy(instance) {
+			healthyInstances = append(healthyInstances, instance)
+		}
+	}
+
+	if len(healthyInstances) == 0 {
+		// 如果没有健康实例，返回第一个实例（降级处理）
+		return instances[0]
+	}
+
+	return strategy.Select(healthyInstances)
 }
 
 // GetBreaker 获取服务对应的熔断器

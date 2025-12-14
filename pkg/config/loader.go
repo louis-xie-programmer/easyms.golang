@@ -10,6 +10,7 @@ package config
 import (
 	"easyms/pkg/discovery"
 	"easyms/pkg/entitis"
+	"fmt"
 )
 
 // LoadServiceConfig 根据配置类型加载服务配置
@@ -45,6 +46,13 @@ func LoadServiceConfig(client *discovery.Discovery, keyPath string, storeType st
 		err := provider.LoadAppConfig()
 		if err != nil {
 			return err
+		}
+	}
+
+	// 验证配置的有效性
+	if appConfig != nil {
+		if err := appConfig.Validate(); err != nil {
+			return fmt.Errorf("configuration validation failed: %w", err)
 		}
 	}
 

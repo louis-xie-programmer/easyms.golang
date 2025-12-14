@@ -21,7 +21,7 @@ func main() {
 	// 获取环境变量
 	// 网关服务名称和端口
 	serverName := "gateway"
-	port := 10001
+	port := 10000
 
 	// 初始化应用配置存储
 	// 读取 configs/app.yaml 配置文件

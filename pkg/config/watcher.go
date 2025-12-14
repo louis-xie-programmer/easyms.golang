@@ -7,6 +7,7 @@ import (
 	"gopkg.in/yaml.v2"
 	"time"
 	"reflect"
+	"sync"
 )
 
 // ConfigWatcher 配置监听器
@@ -19,6 +20,14 @@ type ConfigWatcher struct {
 	onChange    func(*entitis.AppConfig)
 	stopCh      chan struct{}
 	ticker      *time.Ticker
+	mu          sync.RWMutex
+	lastConfigs map[string]string // 存储上次配置值，用于比较变化
+}
+
+// ConfigWatcherInterface 配置监听器接口
+type ConfigWatcherInterface interface {
+	Start()
+	Stop()
 }
 
 // NewConfigWatcher 创建一个新的配置监听器
@@ -27,12 +36,13 @@ func NewConfigWatcher(
 	keyPath, serverName, env string,
 	onChange func(*entitis.AppConfig)) *ConfigWatcher {
 	return &ConfigWatcher{
-		client:     client,
-		keyPath:    keyPath,
-		serverName: serverName,
-		env:        env,
-		onChange:   onChange,
-		stopCh:     make(chan struct{}),
+		client:      client,
+		keyPath:     keyPath,
+		serverName:  serverName,
+		env:         env,
+		onChange:    onChange,
+		stopCh:      make(chan struct{}),
+		lastConfigs: make(map[string]string),
 	}
 }
 
@@ -72,6 +82,9 @@ func (cw *ConfigWatcher) checkConfigChange() {
 	// 临时存储新配置
 	newConfig := &entitis.AppConfig{}
 	
+	// 是否有配置发生变化
+	configChanged := false
+	
 	// 遍历所有配置键
 	for _, key := range appKeys {
 		val, err := cw.client.Get(key)
@@ -82,6 +95,20 @@ func (cw *ConfigWatcher) checkConfigChange() {
 		if val == "" {
 			fmt.Printf("Config key not found: %s\n", key)
 			continue
+		}
+		
+		// 检查配置值是否有变化
+		cw.mu.RLock()
+		lastVal, exists := cw.lastConfigs[key]
+		cw.mu.RUnlock()
+		
+		if !exists || lastVal != val {
+			configChanged = true
+			cw.mu.Lock()
+			cw.lastConfigs[key] = val
+			cw.mu.Unlock()
+			
+			fmt.Printf("Detected config change for key: %s\n", key)
 		}
 		
 		var cfg entitis.AppConfig
@@ -111,7 +138,13 @@ func (cw *ConfigWatcher) checkConfigChange() {
 	}
 	
 	// 如果配置发生了变化，则触发变更回调
-	if cw.isConfigChanged(newConfig) {
+	if configChanged && cw.isConfigChanged(newConfig) {
+		// 验证新配置
+		if err := newConfig.Validate(); err != nil {
+			fmt.Printf("New config validation failed: %v\n", err)
+			return
+		}
+		
 		fmt.Println("Config changed, triggering update...")
 		cw.onChange(newConfig)
 	}

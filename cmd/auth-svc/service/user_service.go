@@ -5,6 +5,7 @@ import (
 	"easyms/cmd/auth-svc/model"
 	"easyms/pkg/db"
 	"errors"
+	"fmt"
 )
 
 var (
@@ -34,8 +35,11 @@ func (service *PostgresUserDetailsService) GetUserDetailByUsername(ctx context.C
 	var userDetails model.UserDetails
 	err := service.db.Query(&userDetails, "select * from user_details where username = ?", username)
 	if err != nil {
+		fmt.Printf("postgres error: %v\n", err)
 		return nil, err
 	}
+
+	fmt.Printf("userDetails: %v\n", userDetails)
 
 	// 使用bcrypt验证密码
 	if !userDetails.CheckPassword(password) {

@@ -2,37 +2,28 @@ package service
 
 import (
 	"context"
-	"easyms/cmd/auth-svc/model"
-	"easyms/pkg/db"
 	"errors"
+	. "easyms/cmd/auth-svc/model"
+	"easyms/pkg/db"
 )
 
 var (
-	// ErrClientNotExist 客户端不存在错误
-	ErrClientNotExist = errors.New("clientId is not exist")
-	// ErrClientSecret 客户端密钥错误错误
-	ErrClientSecret = errors.New("invalid clientSecret")
+	// ErrClientNotExist 客户端不存在
+	ErrClientNotExist = errors.New("client is not exist")
+	// ErrClientSecret 客户端密钥错误
+	ErrClientSecret = errors.New("invalid client secret")
 )
 
-// ClientDetailsService Service Define a service interface
 type ClientDetailsService interface {
 	// GetClientDetailByClientId 根据客户端ID和客户端密钥获取客户端详细信息
-	GetClientDetailByClientId(ctx context.Context, clientId string, clientSecret string) (*model.ClientDetails, error)
+	GetClientDetailByClientId(ctx context.Context, clientId string, clientSecret string) (*ClientDetails, error)
 }
 
-// NewInMemoryClientDetailsService 创建内存中的客户端详细信息服务实例
-func NewInMemoryClientDetailsService(clientDetailsDict map[string]*model.ClientDetails) ClientDetailsService {
-	return &InMemoryClientDetailsService{
-		clientDetailsDict: clientDetailsDict,
-	}
-}
-
-// PostgresClientDetailsService 创建 Postgres 数据库客户端详细信息服务实例
+// PostgresClientDetailsService postgres客户端详情服务
 type PostgresClientDetailsService struct {
 	db *db.EasyDatabase
 }
 
-// NewPostgresClientDetailsService 创建 Postgres 数据库客户端详细信息服务实例
 func NewPostgresClientDetailsService(db *db.EasyDatabase) ClientDetailsService {
 	return &PostgresClientDetailsService{
 		db: db,
@@ -40,8 +31,8 @@ func NewPostgresClientDetailsService(db *db.EasyDatabase) ClientDetailsService {
 }
 
 // GetClientDetailByClientId 根据客户端ID和客户端密钥获取客户端详细信息
-func (service *PostgresClientDetailsService) GetClientDetailByClientId(ctx context.Context, clientId string, clientSecret string) (*model.ClientDetails, error) {
-	var clientDetails model.ClientDetails
+func (service *PostgresClientDetailsService) GetClientDetailByClientId(ctx context.Context, clientId string, clientSecret string) (*ClientDetails, error) {
+	var clientDetails ClientDetails
 	err := service.db.Query(&clientDetails, "select * from client_details where client_id = ? and client_secret = ?", clientId, clientSecret)
 	if err != nil {
 		return nil, err
@@ -51,11 +42,11 @@ func (service *PostgresClientDetailsService) GetClientDetailByClientId(ctx conte
 
 // InMemoryClientDetailsService 内存中的客户端详细信息服务
 type InMemoryClientDetailsService struct {
-	clientDetailsDict map[string]*model.ClientDetails
+	clientDetailsDict map[string]*ClientDetails
 }
 
 // GetClientDetailByClientId 根据客户端ID和客户端密钥获取客户端详细信息
-func (service *InMemoryClientDetailsService) GetClientDetailByClientId(ctx context.Context, clientId string, clientSecret string) (*model.ClientDetails, error) {
+func (service *InMemoryClientDetailsService) GetClientDetailByClientId(ctx context.Context, clientId string, clientSecret string) (*ClientDetails, error) {
 	// 根据 clientId 获取 clientDetails
 	clientDetails, ok := service.clientDetailsDict[clientId]
 	if ok {

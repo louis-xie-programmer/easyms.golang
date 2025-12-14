@@ -12,6 +12,8 @@ import (
 var (
 	// ErrNotSupportGrantType               授权类型不支持错误
 	ErrNotSupportGrantType = errors.New("grant type is not supported")
+	// ErrInvalidClient                       客户端信息错误错误
+	ErrInvalidClient = errors.New("invalid client")
 	// ErrInvalidUsernameAndPasswordRequest 用户名密码错误错误
 	ErrInvalidUsernameAndPasswordRequest = errors.New("invalid username, password")
 	// ErrInvalidTokenRequest               令牌错误错误
@@ -27,10 +29,9 @@ type TokenService interface {
 	CreateAccessToken(oauth2Details *OAuth2Details) (*OAuth2Token, error)
 	// RefreshAccessToken 根据刷新令牌获取访问令牌
 	RefreshAccessToken(refreshTokenValue string) (*OAuth2Token, error)
-	// GetAccessToken 根据用户信息和客户端信息获取已生成访问令牌
-	GetAccessToken(details *OAuth2Details) (*OAuth2Token, error)
-	// ReadAccessToken 根据访问令牌值获取访问令牌结构体
 	ReadAccessToken(tokenValue string) (*OAuth2Token, error)
+	// ReadOAuth2Details 根据访问令牌值获取OAuth2Details信息
+	ReadOAuth2Details(tokenValue string) (*OAuth2Details, error)
 }
 
 type DefaultTokenService struct {
@@ -46,37 +47,10 @@ func NewTokenService(tokenStore storage.TokenStore, tokenEnhancer storage.TokenE
 }
 
 func (tokenService *DefaultTokenService) CreateAccessToken(oauth2Details *OAuth2Details) (*OAuth2Token, error) {
-	// 判断是否存在未失效的访问令牌
-	existToken, err := tokenService.tokenStore.GetAccessToken(oauth2Details)
 	var refreshToken *OAuth2Token
-	if err == nil {
-		// 存在未失效访问令牌，直接返回
-		if !existToken.IsExpired() {
-			tokenService.tokenStore.StoreAccessToken(existToken, oauth2Details)
-			return existToken, nil
-		}
-		// 访问令牌已失效，移除
-		tokenService.tokenStore.RemoveAccessToken(existToken.TokenValue)
-		if existToken.RefreshToken != nil {
-			refreshToken = existToken.RefreshToken
-			tokenService.tokenStore.RemoveRefreshToken(refreshToken.TokenType)
-		}
-	}
-	// 不存在 生成刷新令牌
-	if refreshToken == nil || refreshToken.IsExpired() {
-		refreshToken, err = tokenService.createRefreshToken(oauth2Details)
-		if err != nil {
-			return nil, err
-		}
-	}
-
+	refreshToken, err := tokenService.createRefreshToken(oauth2Details)
 	// 生成新的访问令牌
 	accessToken, err := tokenService.createAccessToken(refreshToken, oauth2Details)
-	if err == nil {
-		// 保存新生成令牌
-		tokenService.tokenStore.StoreAccessToken(accessToken, oauth2Details)
-		tokenService.tokenStore.StoreRefreshToken(refreshToken, oauth2Details)
-	}
 	return accessToken, err
 }
 
@@ -123,21 +97,10 @@ func (tokenService *DefaultTokenService) RefreshAccessToken(refreshTokenValue st
 		// 读取刷新令牌对应的用户信息和客户端信息
 		oauth2Details, err := tokenService.tokenStore.ReadOAuth2DetailsForRefreshToken(refreshTokenValue)
 		if err == nil {
-			// 获取访问令牌对应的用户信息和客户端信息
-			oauth2Token, err := tokenService.tokenStore.GetAccessToken(oauth2Details)
-			// 移除原有的访问令牌
-			if err == nil {
-				tokenService.tokenStore.RemoveAccessToken(oauth2Token.TokenValue)
-			}
-			// 移除已使用的刷新令牌
 			tokenService.tokenStore.RemoveRefreshToken(refreshTokenValue)
 			refreshToken, err = tokenService.createRefreshToken(oauth2Details)
 			if err == nil {
 				accessToken, err := tokenService.createAccessToken(refreshToken, oauth2Details)
-				if err == nil {
-					tokenService.tokenStore.StoreAccessToken(accessToken, oauth2Details)
-					tokenService.tokenStore.StoreRefreshToken(refreshToken, oauth2Details)
-				}
 				return accessToken, err
 			}
 		}
@@ -145,12 +108,12 @@ func (tokenService *DefaultTokenService) RefreshAccessToken(refreshTokenValue st
 	return nil, err
 }
 
-func (tokenService *DefaultTokenService) GetAccessToken(details *OAuth2Details) (*OAuth2Token, error) {
-	return tokenService.tokenStore.GetAccessToken(details)
-}
-
 func (tokenService *DefaultTokenService) ReadAccessToken(tokenValue string) (*OAuth2Token, error) {
 	return tokenService.tokenStore.ReadAccessToken(tokenValue)
+}
+
+func (tokenService *DefaultTokenService) ReadOAuth2Details(tokenValue string) (*OAuth2Details, error) {
+	return tokenService.tokenStore.ReadOAuth2Details(tokenValue)
 }
 
 func (tokenService *DefaultTokenService) GetOAuth2DetailsByAccessToken(tokenValue string) (*OAuth2Details, error) {

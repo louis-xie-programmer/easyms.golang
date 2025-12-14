@@ -22,3 +22,17 @@ type OAuth2Details struct {
 	Client *ClientDetails
 	User   *UserDetails
 }
+
+// RevokedToken 令牌撤销记录模型
+// 用于存储已撤销的令牌信息
+type RevokedToken struct {
+	ID         int64     `gorm:"column:id;primaryKey;autoIncrement"`
+	TokenValue string    `gorm:"column:token_value;uniqueIndex:idx_token_value;type:varchar(2048)"`
+	Expiry     time.Time `gorm:"column:expiry;index"`
+	CreatedAt  time.Time `gorm:"column:created_at"`
+}
+
+// TableName 设置RevokedToken模型对应的表名
+func (RevokedToken) TableName() string {
+	return "revoked_tokens"
+}

@@ -3,10 +3,8 @@ package config
 import (
 	"easyms/pkg/discovery"
 	"easyms/pkg/entitis"
-	"encoding/json"
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"gopkg.in/yaml.v2"
@@ -14,7 +12,7 @@ import (
 
 // ConfigHandler 配置管理处理器
 type ConfigHandler struct {
-	discovery *discovery.Discovery
+	discovery  *discovery.Discovery
 	serverName string
 	env        string
 }
@@ -34,18 +32,18 @@ func (h *ConfigHandler) SaveVersion(c *gin.Context) {
 	var req struct {
 		Description string `json:"description"`
 	}
-	
+
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	
+
 	versionID, err := SaveConfigVersion(h.discovery, h.serverName, h.env, req.Description)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	
+
 	c.JSON(http.StatusOK, gin.H{
 		"version_id": versionID,
 		"message":    "Configuration version saved successfully",
@@ -60,12 +58,12 @@ func (h *ConfigHandler) ListVersions(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	
+
 	// 按时间倒序排列
 	for i, j := 0, len(versions)-1; i < j; i, j = i+1, j-1 {
 		versions[i], versions[j] = versions[j], versions[i]
 	}
-	
+
 	c.JSON(http.StatusOK, versions)
 }
 
@@ -73,7 +71,7 @@ func (h *ConfigHandler) ListVersions(c *gin.Context) {
 // GET /config/version/:versionID
 func (h *ConfigHandler) GetVersion(c *gin.Context) {
 	versionID := c.Param("versionID")
-	
+
 	// 获取版本信息
 	key := fmt.Sprintf("easyms/versions/%s/%s/%s", h.env, h.serverName, versionID)
 	val, err := h.discovery.Get(key)
@@ -81,19 +79,19 @@ func (h *ConfigHandler) GetVersion(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	
+
 	if val == "" {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Version not found"})
 		return
 	}
-	
+
 	var version entitis.ConfigVersion
 	err = yaml.Unmarshal([]byte(val), &version)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	
+
 	c.JSON(http.StatusOK, version)
 }
 
@@ -101,13 +99,13 @@ func (h *ConfigHandler) GetVersion(c *gin.Context) {
 // POST /config/rollback/:versionID
 func (h *ConfigHandler) RollbackToVersion(c *gin.Context) {
 	versionID := c.Param("versionID")
-	
+
 	err := RollbackToVersion(h.discovery, h.serverName, h.env, versionID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	
+
 	c.JSON(http.StatusOK, gin.H{
 		"message": fmt.Sprintf("Successfully rolled back to version %s", versionID),
 	})
@@ -121,10 +119,10 @@ func (h *ConfigHandler) GetCurrentConfig(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Current config not found"})
 		return
 	}
-	
+
 	// 创建配置副本以避免并发问题
 	configCopy := *currentConfig
-	
+
 	c.JSON(http.StatusOK, configCopy)
 }
 
@@ -132,19 +130,25 @@ func (h *ConfigHandler) GetCurrentConfig(c *gin.Context) {
 // PUT /config/current
 func (h *ConfigHandler) UpdateConfig(c *gin.Context) {
 	var newConfig entitis.AppConfig
-	
+
 	if err := c.ShouldBindJSON(&newConfig); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	
+
+	// 验证新配置
+	if err := newConfig.Validate(); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Configuration validation failed: %v", err)})
+		return
+	}
+
 	// 将新配置保存到Consul
 	configData, err := yaml.Marshal(newConfig)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	
+
 	// 保存到Consul
 	configKey := fmt.Sprintf("easyms/%s/%s.yaml", h.env, h.serverName)
 	err = h.discovery.Put(configKey, string(configData))
@@ -152,7 +156,7 @@ func (h *ConfigHandler) UpdateConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	
+
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Configuration updated successfully. It will take effect on next reload cycle.",
 	})

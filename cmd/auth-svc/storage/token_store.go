@@ -8,6 +8,7 @@ package storage
 import (
 	. "easyms/cmd/auth-svc/model"
 	"easyms/pkg/db"
+	"easyms/pkg/logger"
 	"errors"
 	"github.com/golang-jwt/jwt"
 	"time"
@@ -23,18 +24,12 @@ var (
 // TokenStore 令牌存储接口
 // 定义了令牌管理的标准方法
 type TokenStore interface {
-	// StoreAccessToken 存储访问令牌
-	StoreAccessToken(oauth2Token *OAuth2Token, oauth2Details *OAuth2Details)
 	// ReadAccessToken 根据令牌值获取访问令牌结构体
 	ReadAccessToken(tokenValue string) (*OAuth2Token, error)
 	// ReadOAuth2Details 根据令牌值获取令牌对应的客户端和用户信息
 	ReadOAuth2Details(tokenValue string) (*OAuth2Details, error)
-	// GetAccessToken 根据客户端信息和用户信息获取访问令牌
-	GetAccessToken(oauth2Details *OAuth2Details) (*OAuth2Token, error)
 	// RemoveAccessToken 移除存储的访问令牌
 	RemoveAccessToken(tokenValue string)
-	// StoreRefreshToken 存储刷新令牌
-	StoreRefreshToken(oauth2Token *OAuth2Token, oauth2Details *OAuth2Details)
 	// RemoveRefreshToken 移除存储的刷新令牌
 	RemoveRefreshToken(oauth2Token string)
 	// ReadRefreshToken 根据令牌值获取刷新令牌
@@ -47,19 +42,12 @@ type TokenStore interface {
 	IsRefreshTokenRevoked(tokenValue string) (bool, error)
 }
 
-// RevokedToken 令牌撤销记录模型
-// 用于存储已撤销的令牌信息
-type RevokedToken struct {
-	ID         int64     `gorm:"primaryKey;autoIncrement"`
-	TokenValue string    `gorm:"uniqueIndex;type:varchar(512)"`
-	Expiry     time.Time `gorm:"index"`
-	CreatedAt  time.Time
-}
-
-// NewJwtTokenStore 创建新的JWT令牌存储实例
+// NewJwtTokenStore 创建新的JWT令牌存储实例,
+// 当前版本令牌存储在JWT令牌中，无需额外存储操作
 // 参数:
 //   - jwtTokenEnhancer: JWT令牌增强器
 //   - db: 数据库实例
+//
 // 返回值:
 //   - TokenStore: 令牌存储实例
 func NewJwtTokenStore(jwtTokenEnhancer *JwtTokenEnhancer, db *db.EasyDatabase) TokenStore {
@@ -69,6 +57,7 @@ func NewJwtTokenStore(jwtTokenEnhancer *JwtTokenEnhancer, db *db.EasyDatabase) T
 		if err != nil {
 			// 如果迁移失败，记录日志但继续执行
 			// 在实际应用中应该有更好的错误处理机制
+			logger.Error(err, "auto migrate revoked_tokens table error: %v", "auth-svc", nil)
 		}
 	}
 
@@ -80,19 +69,14 @@ func NewJwtTokenStore(jwtTokenEnhancer *JwtTokenEnhancer, db *db.EasyDatabase) T
 
 // JwtTokenStore JWT令牌存储实现
 type JwtTokenStore struct {
-	jwtTokenEnhancer *JwtTokenEnhancer  // JWT令牌增强器
-	db               *db.EasyDatabase   // 数据库实例
-}
-
-// StoreAccessToken JWT令牌信息存储在令牌本身中，无需额外存储操作
-func (tokenStore *JwtTokenStore) StoreAccessToken(oauth2Token *OAuth2Token, oauth2Details *OAuth2Details) {
-	// JWT令牌是自包含的，不需要额外存储
-	// 此方法留空以满足接口要求
+	jwtTokenEnhancer *JwtTokenEnhancer // JWT令牌增强器
+	db               *db.EasyDatabase  // 数据库实例
 }
 
 // ReadAccessToken 根据令牌值获取访问令牌结构体
 // 参数:
 //   - tokenValue: 令牌值
+//
 // 返回值:
 //   - *OAuth2Token: 访问令牌结构体
 //   - error: 操作成功返回nil，失败返回具体错误
@@ -114,6 +98,7 @@ func (tokenStore *JwtTokenStore) ReadAccessToken(tokenValue string) (*OAuth2Toke
 // ReadOAuth2Details 根据令牌值获取令牌对应的客户端和用户信息
 // 参数:
 //   - tokenValue: 令牌值
+//
 // 返回值:
 //   - *OAuth2Details: 客户端和用户信息
 //   - error: 操作成功返回nil，失败返回具体错误
@@ -130,18 +115,6 @@ func (tokenStore *JwtTokenStore) ReadOAuth2Details(tokenValue string) (*OAuth2De
 	// 从JWT令牌中提取信息
 	_, oauth2Details, err := tokenStore.jwtTokenEnhancer.Extract(tokenValue)
 	return oauth2Details, err
-}
-
-// GetAccessToken 根据客户端信息和用户信息获取访问令牌
-// 参数:
-//   - oauth2Details: 客户端和用户信息
-// 返回值:
-//   - *OAuth2Token: 访问令牌结构体
-//   - error: 操作成功返回nil，失败返回具体错误
-func (tokenStore *JwtTokenStore) GetAccessToken(oauth2Details *OAuth2Details) (*OAuth2Token, error) {
-	// 对于JWT令牌，无法通过客户端和用户信息直接获取访问令牌
-	// 因为每个令牌都是唯一的，且存储在客户端
-	return nil, ErrNotSupportOperation
 }
 
 // RemoveAccessToken 移除存储的访问令牌
@@ -163,26 +136,13 @@ func (tokenStore *JwtTokenStore) RemoveAccessToken(tokenValue string) {
 				CreatedAt:  time.Now(),
 			}
 			// 插入撤销记录
-			tokenStore.db.Insert(revokedToken)
+			err = tokenStore.db.Insert(revokedToken)
+			if err != nil {
+				// 如果插入失败，记录日志但继续执行
+				// 在实际应用中应该有更好的错误处理机制
+				logger.Error(err, "insert revoked_tokens table error: %v", "auth-svc", nil)
+			}
 		}
-	}
-}
-
-// StoreRefreshToken 存储刷新令牌
-// 参数:
-//   - oauth2Token: OAuth2令牌
-//   - oauth2Details: 客户端和用户信息
-func (tokenStore *JwtTokenStore) StoreRefreshToken(oauth2Token *OAuth2Token, oauth2Details *OAuth2Details) {
-	// JWT刷新令牌是自包含的，不需要额外存储
-	// 但可以保存一些基本信息用于后续验证
-	if tokenStore.db != nil {
-		revokedToken := &RevokedToken{
-			TokenValue: oauth2Token.TokenValue,
-			Expiry:     *oauth2Token.ExpiresTime,
-			CreatedAt:  time.Now(),
-		}
-		// 将刷新令牌信息保存到数据库
-		tokenStore.db.Insert(revokedToken)
 	}
 }
 
@@ -204,7 +164,12 @@ func (tokenStore *JwtTokenStore) RemoveRefreshToken(tokenValue string) {
 				CreatedAt:  time.Now(),
 			}
 			// 插入撤销记录
-			tokenStore.db.Insert(revokedToken)
+			err = tokenStore.db.Insert(revokedToken)
+			if err != nil {
+				// 如果插入失败，记录日志但继续执行
+				// 在实际应用中应该有更好的错误处理机制
+				logger.Error(err, "insert revoked_tokens table error: %v", "auth-svc", nil)
+			}
 		}
 	}
 }
@@ -212,6 +177,7 @@ func (tokenStore *JwtTokenStore) RemoveRefreshToken(tokenValue string) {
 // ReadRefreshToken 根据令牌值获取刷新令牌
 // 参数:
 //   - tokenValue: 令牌值
+//
 // 返回值:
 //   - *OAuth2Token: 刷新令牌结构体
 //   - error: 操作成功返回nil，失败返回具体错误
@@ -233,6 +199,7 @@ func (tokenStore *JwtTokenStore) ReadRefreshToken(tokenValue string) (*OAuth2Tok
 // ReadOAuth2DetailsForRefreshToken 根据令牌值获取刷新令牌对应的客户端和用户信息
 // 参数:
 //   - tokenValue: 令牌值
+//
 // 返回值:
 //   - *OAuth2Details: 客户端和用户信息
 //   - error: 操作成功返回nil，失败返回具体错误
@@ -254,6 +221,7 @@ func (tokenStore *JwtTokenStore) ReadOAuth2DetailsForRefreshToken(tokenValue str
 // IsAccessTokenRevoked 检查访问令牌是否被撤销
 // 参数:
 //   - tokenValue: 令牌值
+//
 // 返回值:
 //   - bool: 撤销返回true，否则返回false
 //   - error: 操作成功返回nil，失败返回具体错误
@@ -276,6 +244,7 @@ func (tokenStore *JwtTokenStore) IsAccessTokenRevoked(tokenValue string) (bool, 
 // IsRefreshTokenRevoked 检查刷新令牌是否被撤销
 // 参数:
 //   - tokenValue: 令牌值
+//
 // 返回值:
 //   - bool: 撤销返回true，否则返回false
 //   - error: 操作成功返回nil，失败返回具体错误
@@ -312,17 +281,19 @@ type OAuth2TokenCustomClaims struct {
 	RefreshToken  OAuth2Token
 	JTI           string // JWT ID，用于防重放攻击
 	IssuedAt      int64  // 签发时间，用于防重放攻击
+	GrantType     string // 授权类型，例如"password"、"refresh_token"等
 	jwt.StandardClaims
 }
 
 // JwtTokenEnhancer JWT令牌增强器
 type JwtTokenEnhancer struct {
-	secretKey []byte  // 签名密钥
+	secretKey []byte // 签名密钥
 }
 
 // NewJwtTokenEnhancer 创建新的JWT令牌增强器
 // 参数:
 //   - secretKey: 签名密钥
+//
 // 返回值:
 //   - TokenEnhancer: 令牌增强器实例
 func NewJwtTokenEnhancer(secretKey string) TokenEnhancer {
@@ -335,6 +306,7 @@ func NewJwtTokenEnhancer(secretKey string) TokenEnhancer {
 // 参数:
 //   - oauth2Token: OAuth2令牌
 //   - oauth2Details: 客户端和用户信息
+//
 // 返回值:
 //   - *OAuth2Token: 增强后的OAuth2令牌
 //   - error: 操作成功返回nil，失败返回具体错误
@@ -345,6 +317,7 @@ func (enhancer *JwtTokenEnhancer) Enhance(oauth2Token *OAuth2Token, oauth2Detail
 // Extract 从 Token 中还原信息
 // 参数:
 //   - tokenValue: 令牌值
+//
 // 返回值:
 //   - *OAuth2Token: OAuth2令牌
 //   - *OAuth2Details: 客户端和用户信息
@@ -378,11 +351,6 @@ func (enhancer *JwtTokenEnhancer) Extract(tokenValue string) (*OAuth2Token, *OAu
 
 		// 创建OAuth2Details对象，注意不包含敏感信息
 		oauth2Details := &OAuth2Details{
-			User: &UserDetails{
-				Username:    claims.UserDetails.Username,
-				Authorities: claims.UserDetails.Authorities,
-				// 不返回密码等敏感信息
-			},
 			Client: &ClientDetails{
 				ClientId:                    claims.ClientDetails.ClientId,
 				AccessTokenValiditySeconds:  claims.ClientDetails.AccessTokenValiditySeconds,
@@ -391,6 +359,15 @@ func (enhancer *JwtTokenEnhancer) Extract(tokenValue string) (*OAuth2Token, *OAu
 				AuthorizedGrantTypes:        claims.ClientDetails.AuthorizedGrantTypes,
 				// 不返回客户端密钥
 			},
+		}
+
+		// 只有当用户信息存在且不为空时才设置UserDetails
+		if claims.UserDetails.Username != "" || claims.UserDetails.Authorities != "" {
+			oauth2Details.User = &UserDetails{
+				Username:    claims.UserDetails.Username,
+				Authorities: claims.UserDetails.Authorities,
+				// 不返回密码等敏感信息
+			}
 		}
 
 		return oauth2Token, oauth2Details, nil
@@ -403,20 +380,33 @@ func (enhancer *JwtTokenEnhancer) Extract(tokenValue string) (*OAuth2Token, *OAu
 // 参数:
 //   - oauth2Token: OAuth2令牌
 //   - oauth2Details: 客户端和用户信息
+//
 // 返回值:
 //   - *OAuth2Token: 签名后的OAuth2令牌
 //   - error: 操作成功返回nil，失败返回具体错误
 func (enhancer *JwtTokenEnhancer) sign(oauth2Token *OAuth2Token, oauth2Details *OAuth2Details) (*OAuth2Token, error) {
 	// 获取过期时间
 	expireTime := oauth2Token.ExpiresTime
-	
+
 	// 复制客户端和用户信息，避免修改原始数据
 	clientDetails := *oauth2Details.Client
-	userDetails := *oauth2Details.User
-	
+
 	// 清除敏感信息
 	clientDetails.ClientSecret = ""
-	userDetails.Password = ""
+
+	// 处理用户信息，添加空值检查
+	var userDetails UserDetails
+	if oauth2Details.User != nil {
+		userDetails = *oauth2Details.User
+		// 清除用户敏感信息
+		userDetails.Password = ""
+	}
+
+	// 如果用户为空，则为客户端凭证授权
+	grantType := "client_credentials"
+	if oauth2Details.User != nil {
+		grantType = "user_grant" // 或其他适当的标识
+	}
 
 	// 构造JWT声明
 	claims := OAuth2TokenCustomClaims{
@@ -424,6 +414,7 @@ func (enhancer *JwtTokenEnhancer) sign(oauth2Token *OAuth2Token, oauth2Details *
 		ClientDetails: clientDetails,
 		JTI:           oauth2Token.TokenValue, // 使用TokenValue作为JWT ID
 		IssuedAt:      time.Now().Unix(),
+		GrantType:     grantType,
 		StandardClaims: jwt.StandardClaims{
 			ExpiresAt: expireTime.Unix(),
 			Issuer:    "System",
@@ -447,6 +438,6 @@ func (enhancer *JwtTokenEnhancer) sign(oauth2Token *OAuth2Token, oauth2Details *
 		oauth2Token.TokenType = "jwt"
 		return oauth2Token, nil
 	}
-	
+
 	return nil, err
 }

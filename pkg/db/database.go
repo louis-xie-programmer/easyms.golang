@@ -34,6 +34,37 @@ func (a PgStringArray) Value() (driver.Value, error) {
 // Scan 实现sql.Scanner接口
 // 将PostgreSQL数组转换为Go数组
 func (a *PgStringArray) Scan(src interface{}) error {
+	if src == nil {
+		*a = nil
+		return nil
+	}
+	
+	// 如果src是字符串类型，我们尝试解析它
+	if str, ok := src.(string); ok {
+		// 解析PostgreSQL数组格式 "{item1,item2,...}"
+		if len(str) >= 2 && str[0] == '{' && str[len(str)-1] == '}' {
+			content := str[1 : len(str)-1]
+			if content == "" {
+				*a = PgStringArray{}
+				return nil
+			}
+			
+			// 简单分割，实际PostgreSQL数组解析应该更复杂
+			items := strings.Split(content, ",")
+			result := make(PgStringArray, len(items))
+			for i, item := range items {
+				// 移除可能的引号
+				if len(item) >= 2 && item[0] == '"' && item[len(item)-1] == '"' {
+					item = item[1 : len(item)-1]
+				}
+				result[i] = item
+			}
+			*a = result
+			return nil
+		}
+	}
+	
+	// 使用pq.Array进行标准解析
 	return pq.Array(a).Scan(src)
 }
 
@@ -50,6 +81,21 @@ type Database interface {
 	Limit(limit int) *gorm.DB                                        // 添加LIMIT限制
 	Update(model interface{}, updates map[string]interface{}) error   // 更新数据
 	Delete(model interface{}, conds ...interface{}) error            // 删除数据
+}
+
+// DatabaseConfig 定义数据库配置
+type DatabaseConfig struct {
+	Type     string `yaml:"type"`
+	Host     string `yaml:"host"`
+	Port     int    `yaml:"port"`
+	UserName string `yaml:"user"`
+	Password string `yaml:"password"`
+	Database string `yaml:"database"`
+	// 连接池配置
+	MaxIdleConns    int `yaml:"max_idle_conns"`     // 最大空闲连接数
+	MaxOpenConns    int `yaml:"max_open_conns"`     // 最大打开连接数
+	ConnMaxLifetime int `yaml:"conn_max_lifetime"`  // 连接最大生命周期(秒)
+	ConnMaxIdleTime int `yaml:"conn_max_idle_time"` // 连接最大空闲时间(秒)
 }
 
 // NewEasyDatabase 创建新的数据库实例
@@ -76,9 +122,9 @@ func NewEasyDatabase(dbType string, connStr string) (Database, error) {
 	}
 
 	// 为 PostgreSQL 配置更好的数组支持
-	config := &gorm.Config{}
-	if dbType == "postgres" {
-		config.SkipDefaultTransaction = true
+	config := &gorm.Config{
+		SkipDefaultTransaction: true,
+		DisableForeignKeyConstraintWhenMigrating: true,
 	}
 
 	// 创建数据库连接
@@ -115,9 +161,9 @@ func NewEasyDatabaseWithPool(dbType string, connStr string, cfg interface{}) (Da
 	}
 
 	// 为 PostgreSQL 配置更好的数组支持
-	config := &gorm.Config{}
-	if dbType == "postgres" {
-		config.SkipDefaultTransaction = true
+	config := &gorm.Config{
+		SkipDefaultTransaction: true,
+		DisableForeignKeyConstraintWhenMigrating: true,
 	}
 
 	// 创建数据库连接
@@ -154,6 +200,26 @@ func NewEasyDatabaseWithPool(dbType string, connStr string, cfg interface{}) (Da
 			if connMaxLifetime, ok := v["conn_max_lifetime"].(int); ok && connMaxLifetime > 0 {
 				sqlDB.SetConnMaxLifetime(time.Duration(connMaxLifetime) * time.Second)
 			}
+			
+			// 设置连接最大空闲时间
+			// 控制连接在池中保持空闲的最大时间
+			if connMaxIdleTime, ok := v["conn_max_idle_time"].(int); ok && connMaxIdleTime > 0 {
+				sqlDB.SetConnMaxIdleTime(time.Duration(connMaxIdleTime) * time.Second)
+			}
+		case *DatabaseConfig:
+			// 如果cfg是DatabaseConfig结构体类型，直接使用其字段
+			if v.MaxIdleConns > 0 {
+				sqlDB.SetMaxIdleConns(v.MaxIdleConns)
+			}
+			if v.MaxOpenConns > 0 {
+				sqlDB.SetMaxOpenConns(v.MaxOpenConns)
+			}
+			if v.ConnMaxLifetime > 0 {
+				sqlDB.SetConnMaxLifetime(time.Duration(v.ConnMaxLifetime) * time.Second)
+			}
+			if v.ConnMaxIdleTime > 0 {
+				sqlDB.SetConnMaxIdleTime(time.Duration(v.ConnMaxIdleTime) * time.Second)
+			}
 		}
 	}
 
@@ -168,6 +234,37 @@ type EasyDatabase struct {
 
 // AutoMigrate 自动迁移数据库表结构
 func (ed *EasyDatabase) AutoMigrate(models ...interface{}) error {
+	// 对于PostgreSQL，我们需要特别处理包含字符串数组的字段
+	for _, model := range models {
+		// 使用反射检查模型中的字段
+		v := reflect.ValueOf(model)
+		if v.Kind() == reflect.Ptr {
+			v = v.Elem()
+		}
+		if v.Kind() != reflect.Struct {
+			continue
+		}
+
+		t := v.Type()
+		for i := 0; i < t.NumField(); i++ {
+			field := t.Field(i)
+			gormTag := field.Tag.Get("gorm")
+			
+			// 检查是否有text[]或varchar[]类型的字段
+			if strings.Contains(strings.ToLower(gormTag), "text[]") ||
+				strings.Contains(strings.ToLower(gormTag), "varchar[]") {
+				// 如果是PgStringArray类型，我们不需要特殊处理
+				if field.Type == reflect.TypeOf(PgStringArray{}) || 
+				   (field.Type.Kind() == reflect.Ptr && field.Type.Elem() == reflect.TypeOf(PgStringArray{})) {
+					continue
+				}
+				
+				// 如果不是PgStringArray类型但标记为数组，则打印警告
+				fmt.Printf("Warning: Field %s is marked as array type but is not PgStringArray\n", field.Name)
+			}
+		}
+	}
+	
 	return ed.DB.AutoMigrate(models...)
 }
 
@@ -201,11 +298,21 @@ func (ed *EasyDatabase) convertArrays(value interface{}) interface{} {
 				strings.Contains(strings.ToLower(gormTag), "varchar[]") {
 				// 转换为PgStringArray类型
 				// 将Go的[]string转换为PostgreSQL兼容的PgStringArray
-				array := PgStringArray{}
-				for j := 0; j < fv.Len(); j++ {
-					array = append(array, fv.Index(j).String())
+				if fv.Len() >= 0 {
+					array := make(PgStringArray, fv.Len())
+					for j := 0; j < fv.Len(); j++ {
+						array[j] = fv.Index(j).String()
+					}
+					fv.Set(reflect.ValueOf(array))
 				}
-				fv.Set(reflect.ValueOf(array))
+			}
+		}
+		
+		// 检查字段是否为*PgStringArray类型
+		if fv.Kind() == reflect.Ptr && fv.Type().Elem() == reflect.TypeOf(PgStringArray{}) {
+			if !fv.IsNil() {
+				pgArray := fv.Interface().(*PgStringArray)
+				fv.Set(reflect.ValueOf(pgArray))
 			}
 		}
 	}
@@ -220,13 +327,60 @@ func containsArrayTag(tag string) bool {
 
 // Insert 插入数据
 func (ed *EasyDatabase) Insert(value interface{}) error {
+	// 先转换数组字段
 	v := ed.convertArrays(value)
-	return ed.DB.Create(v).Error
+	
+	// 使用 Session 创建一个新会话
+	session := ed.DB.Session(&gorm.Session{})
+	
+	// 执行插入操作
+	return session.Create(v).Error
 }
 
 // Query 查询数据（可传 model + 条件）
 // 使用原生SQL查询并将结果扫描到目标结构体中
 func (ed *EasyDatabase) Query(dest interface{}, query string, args ...interface{}) error {
+	// 对于PostgreSQL数据库，我们需要处理数组字段的扫描
+	if ed.DBType == "postgres" {
+		// 检查dest是否为指向结构体的指针
+		destValue := reflect.ValueOf(dest)
+		if destValue.Kind() == reflect.Ptr && !destValue.IsNil() {
+			elem := destValue.Elem()
+			if elem.Kind() == reflect.Struct {
+				// 遍历结构体字段，查找需要特殊处理的数组字段
+				t := elem.Type()
+				for i := 0; i < t.NumField(); i++ {
+					field := t.Field(i)
+					fv := elem.Field(i)
+					
+					// 检查字段是否为*PgStringArray类型
+					if fv.Kind() == reflect.Ptr && fv.Type().Elem() == reflect.TypeOf(PgStringArray{}) {
+						gormTag := field.Tag.Get("gorm")
+						// 检查是否为PostgreSQL数组类型
+						if strings.Contains(strings.ToLower(gormTag), "text[]") ||
+						   strings.Contains(strings.ToLower(gormTag), "varchar[]") {
+							// 创建PgStringArray实例并赋值给字段
+							pgArray := &PgStringArray{}
+							fv.Set(reflect.ValueOf(pgArray))
+						}
+					}
+					
+					// 检查字段是否为PgStringArray类型
+					if fv.Type() == reflect.TypeOf(PgStringArray{}) {
+						gormTag := field.Tag.Get("gorm")
+						// 检查是否为PostgreSQL数组类型
+						if strings.Contains(strings.ToLower(gormTag), "text[]") ||
+						   strings.Contains(strings.ToLower(gormTag), "varchar[]") {
+							// 创建PgStringArray实例并赋值给字段
+							pgArray := &PgStringArray{}
+							fv.Set(reflect.ValueOf(pgArray))
+						}
+					}
+				}
+			}
+		}
+	}
+	
 	return ed.DB.Raw(query, args...).Scan(dest).Error
 }
 
