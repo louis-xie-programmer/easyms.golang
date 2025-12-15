@@ -24,6 +24,57 @@
 
 ---
 
+## 二、项目目录结构
+
+```
+.
+├── configs/              # 配置文件
+│   ├── app.yaml          # 应用基本配置
+│   ├── share/            # 共享配置
+│   │   ├── dev.yaml      # 开发环境共享配置
+│   │   └── prod.yaml     # 生产环境共享配置
+│   ├── auth-svc/         # 认证服务配置
+│   │   ├── dev.yaml      # 开发环境配置
+│   │   └── prod.yaml     # 生产环境配置
+│   └── user-svc/         # 用户服务配置
+│       ├── dev.yaml      # 开发环境配置
+│       └── prod.yaml     # 生产环境配置
+├── deploy/               # 部署相关文件
+│   └── docker/           # Docker部署文件
+├── internal/             # 内部包（不允许外部导入）
+│   ├── platform/         # 平台级服务
+│   │   ├── gateway/      # API网关
+│   │   │   ├── main/     # 网关服务入口
+│   │   │   └── ...       # 网关相关实现
+│   │   └── migrate/      # 数据库迁移工具
+│   ├── services/         # 业务服务
+│   │   ├── auth/         # 认证服务
+│   │   │   ├── cmd/      # 服务入口
+│   │   │   │   └── authsvc/ # 认证服务主程序
+│   │   │   └── internal/ # 服务私有代码
+│   │   │       ├── consts/   # 常量定义
+│   │   │       ├── domain/   # 领域模型
+│   │   │       ├── handles/  # 处理函数
+│   │   │       ├── middleware/ # 中间件
+│   │   │       ├── model/     # 数据模型
+│   │   │       ├── service/   # 业务逻辑
+│   │   │       └── storage/   # 数据存储
+│   │   └── user/         # 用户服务
+│   │       ├── cmd/      # 服务入口
+│   │       │   └── usersvc/ # 用户服务主程序
+│   │       └── internal/ # 服务私有代码
+│   └── shared/           # 共享组件
+│       ├── config/       # 配置管理
+│       ├── db/           # 数据库访问
+│       ├── discovery/    # 服务发现
+│       ├── logger/       # 日志系统
+│       └── middleware/   # 中间件
+├── migrations/           # 数据库迁移脚本
+├── pkg/                  # 公共包（可被外部导入）
+│   └── models/           # 共享数据模型
+└── ...                   # 其他文件
+```
+
 ## 二、架构总览
 
 ### 1. 设计原则
@@ -61,7 +112,7 @@ consul:
 ### 3. 日志规范
 
 ```go
-// pkg/logger 实现
+// internal/shared/logger 实现
 logger.Info().Str("service", "server1").Msg("Service started")
 ```
 
@@ -199,7 +250,38 @@ curl http://localhost:10001/config/versions
 curl -X POST http://localhost:10001/config/rollback/version-id-12345
 ```
 
-## 七、数据库迁移工具
+## 七、构建和运行
+
+### 1. 本地构建
+
+```bash
+# 构建网关服务
+go build -o gateway ./internal/platform/gateway/main/main.go
+
+# 构建认证服务
+go build -o auth-svc ./internal/services/auth/cmd/authsvc/main.go
+
+# 构建用户服务
+go build -o user-svc ./internal/services/user/cmd/usersvc/main.go
+
+# 构建迁移工具
+go build -o migrate ./internal/platform/migrate/main.go
+```
+
+### 2. Docker构建
+
+```bash
+# 进入docker目录
+cd deploy/docker
+
+# 构建所有服务
+docker-compose build
+
+# 启动所有服务
+docker-compose up -d
+```
+
+## 八、数据库迁移工具
 
 项目集成了 `golang-migrate` 数据库迁移工具，用于管理数据库模式的演进。
 
@@ -213,16 +295,16 @@ curl -X POST http://localhost:10001/config/rollback/version-id-12345
 
 ```bash
 # 应用所有未执行的迁移
-go run cmd/migrate/main.go -database "postgres://user:password@host:port/dbname?sslmode=disable" -up
+go run ./internal/platform/migrate/main.go -database "postgres://user:password@host:port/dbname?sslmode=disable" -up
 
 # 回滚所有已执行的迁移
-go run cmd/migrate/main.go -database "postgres://user:password@host:port/dbname?sslmode=disable" -down
+go run ./internal/platform/migrate/main.go -database "postgres://user:password@host:port/dbname?sslmode=disable" -down
 
 # 使用 GORM 自动迁移（推荐用于开发环境）
-go run cmd/migrate/main.go -database "postgres://user:password@host:port/dbname?sslmode=disable" -auto
+go run ./internal/platform/migrate/main.go -database "postgres://user:password@host:port/dbname?sslmode=disable" -auto
 
 # 指定迁移文件路径
-go run cmd/migrate/main.go -path "./migrations" -database "postgres://user:password@host:port/dbname?sslmode=disable" -up
+go run ./internal/platform/migrate/main.go -path "./migrations" -database "postgres://user:password@host:port/dbname?sslmode=disable" -up
 ```
 
 ### 3. 迁移文件结构
@@ -239,7 +321,7 @@ migrations/
 
 每个迁移都有对应的 `.up.sql` 和 `.down.sql` 文件，分别用于应用和回滚迁移。
 
-## 八、Docker 部署
+## 十、Docker 部署
 
 项目提供了完整的 Docker Compose 部署方案，包括以下组件：
 
@@ -277,7 +359,7 @@ docker-compose up -d
 - **Grafana**：http://localhost:3000 (默认账号密码: admin/admin)
 - **API Gateway**：http://localhost:10000
 
-## 九、Makefile 使用指南
+## 十一、Makefile 使用指南
 
 项目提供了 Makefile 来简化常见的开发和部署任务。
 
@@ -325,7 +407,7 @@ make migrate
 make help
 ```
 
-## 十、快速开始
+## 十二、快速开始
 
 ### 1. 环境准备
 
@@ -340,43 +422,33 @@ make help
 
 ```text
 .
-├── cmd/              # 各服务主程序入口
-│   ├── api-gateway/
-│   ├── auth-svc/
-│   ├── user-svc/
-│   └── migrate/      # 数据库迁移工具
-├── configs/          # 配置文件
-│   ├── app.yaml
-│   ├── share/
-│   ├── auth-svc/
-│   └── user-svc/
-├── deploy/           # 部署相关文件
-│   └── docker/
-├── migrations/       # 数据库迁移脚本
-├── pkg/              # 公共包
-│   ├── config/       # 配置管理
-│   ├── db/           # 数据库访问
-│   ├── discovery/    # 服务注册与发现
-│   ├── gateway/      # 网关相关
-│   ├── logger/       # 日志系统
-│   └── entitis/      # 实体定义
-└── middleware/       # 中间件
+├── configs/              # 配置文件
+│   ├── app.yaml          # 应用基本配置
+│   ├── share/            # 共享配置
+│   │   ├── dev.yaml      # 开发环境共享配置
+│   │   └── prod.yaml     # 生产环境共享配置
+│   ├── auth-svc/         # 认证服务配置
+│   │   ├── dev.yaml      # 开发环境配置
+│   │   └── prod.yaml     # 生产环境配置
+│   └── user-svc/         # 用户服务配置
+│       ├── dev.yaml      # 开发环境配置
+│       └── prod.yaml     # 生产环境配置
+├── deploy/               # 部署相关文件
+│   └── docker/           # Docker部署文件
+├── internal/             # 内部包（不允许外部导入）
+│   ├── platform/         # 平台级服务
+│   │   ├── gateway/      # API网关
+│   │   └── migrate/      # 数据库迁移工具
+│   └── services/         # 业务服务
+│       ├── auth/         # 认证服务
+│       └── user/         # 用户服务
+├── migrations/           # 数据库迁移脚本
+├── pkg/                  # 公共包（可被外部导入）
+│   └── models/           # 共享数据模型
+└── ...                   # 其他文件
 ```
 
-配置文件结构:
-```text
-configs/
-├── app.yaml          # 应用基本配置
-├── share/            # 共享配置
-│   ├── dev.yaml
-│   └── prod.yaml
-├── auth-svc/         # 认证服务配置
-│   ├── dev.yaml
-│   └── prod.yaml
-└── user-svc/         # 用户服务配置
-    ├── dev.yaml
-    └── prod.yaml
-```
+
 
 ### 3. 运行服务
 
@@ -389,7 +461,7 @@ cd deploy/docker
 docker-compose up -d
 ```
 
-## 十一、技术栈
+## 十三、技术栈
 
 | 组件 | 版本 | 说明 |
 |------|------|------|
@@ -402,7 +474,7 @@ docker-compose up -d
 | go-circuitbreaker | latest | 熔断器实现 |
 | golang/oauth2 | latest | OAuth2 支持 |
 
-## 十二、API 文档
+## 十四、API 文档
 
 ### OAuth2 接口
 
@@ -419,7 +491,7 @@ docker-compose up -d
 - `GET /config/current` - 获取当前配置
 - `PUT /config/current` - 更新当前配置
 
-## 十三、部署指南
+## 十五、部署指南
 
 使用 Docker Compose 快速部署整套系统：
 
@@ -434,10 +506,10 @@ cd deploy/docker
 docker-compose up -d
 ```
 
-## 十四、贡献指南
+## 十六、贡献指南
 
 欢迎提交 Issue 和 Pull Request 来改进项目。
 
-## 十五、许可证
+## 十七、许可证
 
 本项目采用 MIT 许可证，详见 [LICENSE](LICENSE) 文件。

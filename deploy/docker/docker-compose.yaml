@@ -9,7 +9,7 @@ services:
     container_name: auth-svc
     build:
       context: ../../
-      dockerfile: ./cmd/auth-svc/Dockerfile
+      dockerfile: ./internal/services/auth/cmd/Dockerfile
     environment:
       POSTGRES_DSN: postgres://easy:easypass@easy-db:5432/easydb?sslmode=disable
       CONSUL_ADDR: consul:8500
@@ -21,7 +21,7 @@ services:
     container_name: user-svc
     build:
       context: ../../
-      dockerfile: ./cmd/user-svc/Dockerfile
+      dockerfile: ./internal/services/user/cmd/Dockerfile
     environment:
       POSTGRES_DSN: postgres://easy:easypass@easy-db:5432/easydb?sslmode=disable
       CONSUL_ADDR: consul:8500
@@ -33,7 +33,7 @@ services:
     container_name: api-gateway
     build:
       context: ../../
-      dockerfile: ./cmd/api-gateway/Dockerfile
+      dockerfile: ./internal/platform/gateway/Dockerfile
     environment:
       CONSUL_ADDR: consul:8500
     ports:

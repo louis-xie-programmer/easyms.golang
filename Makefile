@@ -24,17 +24,18 @@ stop:
 
 run-gateway:
 	@echo "启动网关服务..."
-	go run ./cmd/gateway
+	go run ./internal/platform/gateway/main
 
 run-auth:
-	@echo "启动API服务..."
-	go run ./cmd/auth-svc
+	@echo "启动认证服务..."
+	go run ./internal/services/auth/cmd/authsvc
 
 # 清理构建产物
 clean:
 	@echo "清理构建产物..."
 	go clean
 	rm -rf bin/
+	rm -f logs/*
 
 # 格式化代码
 fmt:
@@ -43,7 +44,7 @@ fmt:
 
 # 迁移数据库
 migrate:
-	go run ./cmd/migrate -dbURL $(DB_URL)
+	go run ./internal/platform/migrate -dbURL $(DB_URL)
 
 # 检查代码问题
 vet:
