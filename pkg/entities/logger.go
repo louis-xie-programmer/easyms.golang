@@ -1,5 +1,5 @@
 // entry.go 定义日志条目数据结构
-package entitis
+package entities
 
 import "time"
 

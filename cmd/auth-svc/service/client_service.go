@@ -1,62 +1,61 @@
 package service
 
 import (
-	"context"
-	"errors"
+	"fmt"
 	. "easyms/cmd/auth-svc/model"
 	"easyms/pkg/db"
 )
 
-var (
-	// ErrClientNotExist 客户端不存在
-	ErrClientNotExist = errors.New("client is not exist")
-	// ErrClientSecret 客户端密钥错误
-	ErrClientSecret = errors.New("invalid client secret")
-)
-
+// ClientDetailsService 客户端详情服务接口
+// 定义了客户端信息管理的标准方法
 type ClientDetailsService interface {
-	// GetClientDetailByClientId 根据客户端ID和客户端密钥获取客户端详细信息
-	GetClientDetailByClientId(ctx context.Context, clientId string, clientSecret string) (*ClientDetails, error)
+	// LoadClientByClientId 根据客户端ID加载客户端详情
+	LoadClientByClientId(clientId string) (*ClientDetails, error)
 }
 
-// PostgresClientDetailsService postgres客户端详情服务
+// PostgresClientDetailsService 基于PostgreSQL的客户端详情服务实现
 type PostgresClientDetailsService struct {
-	db *db.EasyDatabase
+	db db.Database
 }
 
-func NewPostgresClientDetailsService(db *db.EasyDatabase) ClientDetailsService {
-	return &PostgresClientDetailsService{
-		db: db,
-	}
+// NewPostgresClientDetailsService 创建新的PostgreSQL客户端详情服务实例
+// 参数:
+//   - db: 数据库实例
+//
+// 返回值:
+//   - ClientDetailsService: 客户端详情服务实例
+func NewPostgresClientDetailsService(db db.Database) ClientDetailsService {
+	return &PostgresClientDetailsService{db: db}
 }
 
-// GetClientDetailByClientId 根据客户端ID和客户端密钥获取客户端详细信息
-func (service *PostgresClientDetailsService) GetClientDetailByClientId(ctx context.Context, clientId string, clientSecret string) (*ClientDetails, error) {
-	var clientDetails ClientDetails
-	err := service.db.Query(&clientDetails, "select * from client_details where client_id = ? and client_secret = ?", clientId, clientSecret)
+// LoadClientByClientId 根据客户端ID加载客户端详情
+// 参数:
+//   - clientId: 客户端ID
+//
+// 返回值:
+//   - *ClientDetails: 客户端详情
+//   - error: 操作成功返回nil，失败返回具体错误
+func (service *PostgresClientDetailsService) LoadClientByClientId(clientId string) (*ClientDetails, error) {
+	// 构造查询SQL
+	querySql := fmt.Sprintf("SELECT client_id, client_secret, access_token_validity_seconds, refresh_token_validity_seconds,"+
+		"registered_redirect_uri, authorized_grant_types FROM client_details WHERE client_id = '%s'", clientId)
+
+	// 执行查询
+	var client ClientDetails
+	err := service.db.Query(&client, querySql)
 	if err != nil {
 		return nil, err
 	}
-	return &clientDetails, nil
-}
 
-// InMemoryClientDetailsService 内存中的客户端详细信息服务
-type InMemoryClientDetailsService struct {
-	clientDetailsDict map[string]*ClientDetails
-}
-
-// GetClientDetailByClientId 根据客户端ID和客户端密钥获取客户端详细信息
-func (service *InMemoryClientDetailsService) GetClientDetailByClientId(ctx context.Context, clientId string, clientSecret string) (*ClientDetails, error) {
-	// 根据 clientId 获取 clientDetails
-	clientDetails, ok := service.clientDetailsDict[clientId]
-	if ok {
-		// 比较 clientSecret 是否正确
-		if clientDetails.ClientSecret == clientSecret {
-			return clientDetails, nil
-		} else {
-			return nil, ErrClientSecret
-		}
-	} else {
-		return nil, ErrClientNotExist
+	// 构造客户端详情对象
+	clientDetails := &ClientDetails{
+		ClientId:                    client.ClientId,
+		ClientSecret:                client.ClientSecret,
+		AccessTokenValiditySeconds:  client.AccessTokenValiditySeconds,
+		RefreshTokenValiditySeconds: client.RefreshTokenValiditySeconds,
+		RegisteredRedirectUri:       client.RegisteredRedirectUri,
+		AuthorizedGrantTypes:        client.AuthorizedGrantTypes,
 	}
+
+	return clientDetails, nil
 }

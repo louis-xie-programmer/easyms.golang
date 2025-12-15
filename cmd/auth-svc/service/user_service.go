@@ -2,59 +2,73 @@ package service
 
 import (
 	"context"
-	"easyms/cmd/auth-svc/model"
-	"easyms/pkg/db"
 	"errors"
 	"fmt"
+	. "easyms/cmd/auth-svc/model"
+	"easyms/pkg/db"
 )
 
 var (
-	// ErrUserNotExist 用户不存在
-	ErrUserNotExist = errors.New("username is not exist")
-	// ErrPassword 密码错误
-	ErrPassword = errors.New("invalid password")
+	ErrPassword    = errors.New("invalid password")
+	ErrUserNotExist = errors.New("user not exist")
 )
 
+// UserDetailsService 用户详情服务接口
+// 定义了用户信息管理的标准方法
 type UserDetailsService interface {
-	// GetUserDetailByUsername 根据用户名和密码获取用户详情
-	GetUserDetailByUsername(ctx context.Context, username, password string) (*model.UserDetails, error)
+	// LoadUserByUsername 根据用户名加载用户详情
+	LoadUserByUsername(username string) (*UserDetails, error)
 }
 
-// PostgresUserDetailsService postgres用户详情服务
+// PostgresUserDetailsService 基于PostgreSQL的用户详情服务实现
 type PostgresUserDetailsService struct {
-	db *db.EasyDatabase
+	db db.Database
 }
 
-func NewPostgresUserDetailsService(db *db.EasyDatabase) UserDetailsService {
-	return &PostgresUserDetailsService{
-		db: db,
-	}
+// NewPostgresUserDetailsService 创建新的PostgreSQL用户详情服务实例
+// 参数:
+//   - db: 数据库实例
+//
+// 返回值:
+//   - UserDetailsService: 用户详情服务实例
+func NewPostgresUserDetailsService(db db.Database) UserDetailsService {
+	return &PostgresUserDetailsService{db: db}
 }
 
-func (service *PostgresUserDetailsService) GetUserDetailByUsername(ctx context.Context, username, password string) (*model.UserDetails, error) {
-	var userDetails model.UserDetails
-	err := service.db.Query(&userDetails, "select * from user_details where username = ?", username)
+// LoadUserByUsername 根据用户名加载用户详情
+// 参数:
+//   - username: 用户名
+//
+// 返回值:
+//   - *UserDetails: 用户详情
+//   - error: 操作成功返回nil，失败返回具体错误
+func (service *PostgresUserDetailsService) LoadUserByUsername(username string) (*UserDetails, error) {
+	// 构造查询SQL
+	querySql := fmt.Sprintf("SELECT username, password_hash, authorities FROM user_details WHERE username = '%s'", username)
+
+	// 执行查询
+	var user UserDetails
+	err := service.db.Query(&user, querySql)
 	if err != nil {
-		fmt.Printf("postgres error: %v\n", err)
 		return nil, err
 	}
 
-	fmt.Printf("userDetails: %v\n", userDetails)
-
-	// 使用bcrypt验证密码
-	if !userDetails.CheckPassword(password) {
-		return nil, ErrPassword
+	// 构造用户详情对象
+	userDetails := &UserDetails{
+		Username:     user.Username,
+		PasswordHash: user.PasswordHash,
+		Authorities:  user.Authorities,
 	}
 
-	return &userDetails, nil
+	return userDetails, nil
 }
 
 // InMemoryUserDetailsService 内存用户详情服务
 type InMemoryUserDetailsService struct {
-	userDetailsDict map[string]*model.UserDetails
+	userDetailsDict map[string]*UserDetails
 }
 
-func (service *InMemoryUserDetailsService) GetUserDetailByUsername(ctx context.Context, username, password string) (*model.UserDetails, error) {
+func (service *InMemoryUserDetailsService) GetUserDetailByUsername(ctx context.Context, username, password string) (*UserDetails, error) {
 	// 根据 username 获取用户信息
 	userDetails, ok := service.userDetailsDict[username]
 	if ok {
@@ -67,11 +81,20 @@ func (service *InMemoryUserDetailsService) GetUserDetailByUsername(ctx context.C
 	} else {
 		return nil, ErrUserNotExist
 	}
-
 }
 
-func NewInMemoryUserDetailsService(userDetailsList []*model.UserDetails) UserDetailsService {
-	userDetailsDict := make(map[string]*model.UserDetails)
+func (service *InMemoryUserDetailsService) LoadUserByUsername(username string) (*UserDetails, error) {
+	// 根据 username 获取用户信息
+	userDetails, ok := service.userDetailsDict[username]
+	if ok {
+		return userDetails, nil
+	} else {
+		return nil, ErrUserNotExist
+	}
+}
+
+func NewInMemoryUserDetailsService(userDetailsList []*UserDetails) UserDetailsService {
+	userDetailsDict := make(map[string]*UserDetails)
 
 	if userDetailsList != nil {
 		for _, value := range userDetailsList {

@@ -1,4 +1,4 @@
-package entitis
+package entities
 
 import (
 	"fmt"
@@ -28,13 +28,44 @@ type OAuth2Config struct {
 	Issuer    string `yaml:"issuer"`
 }
 
+// CircuitBreakerServiceConfig 熔断器服务配置
+type CircuitBreakerServiceConfig struct {
+	CounterResetInterval int64   `yaml:"counter_reset_interval"` // 计数器重置间隔(秒)
+	HalfOpenMaxSuccesses int64   `yaml:"half_open_max_successes"` // 半开状态最大成功数
+	FailureRateWindow    int64   `yaml:"failure_rate_window"`     // 失败率统计窗口
+	FailureRateThreshold float64 `yaml:"failure_rate_threshold"`  // 失败率阈值
+}
+
+// CircuitBreakerConfig 熔断器配置
+type CircuitBreakerConfig struct {
+	Services map[string]*CircuitBreakerServiceConfig `yaml:"services"` // 各服务的熔断器配置
+}
+
+// RouteRule 路由规则配置
+type RouteRule struct {
+	ServiceName   string            `yaml:"service_name" json:"service_name"`
+	PathPrefix    string            `yaml:"path_prefix" json:"path_prefix"`
+	StripPrefix   bool              `yaml:"strip_prefix" json:"strip_prefix"`
+	PathRewrite   string            `yaml:"path_rewrite" json:"path_rewrite"`
+	RewriteTarget string            `yaml:"rewrite_target" json:"rewrite_target"`
+	AddHeaders    map[string]string `yaml:"add_headers" json:"add_headers"`
+	RemoveHeaders []string          `yaml:"remove_headers" json:"remove_headers"`
+}
+
+// GatewayConfig 网关配置
+type GatewayConfig struct {
+	RouteRules []*RouteRule `yaml:"route_rules" json:"route_rules"`
+}
+
 // AppConfig 定义应用核心配置
 type AppConfig struct {
-	Log       LogConfig        `yaml:"log,omitempty"`
-	Loki      LokiConfig       `yaml:"loki,omitempty"`
-	Server    ServerConfig     `yaml:"server,omitempty"`
-	Database  DatabaseConfig   `yaml:"database,omitempty"`
-	RateLimit *RateLimitConfig `yaml:"rate_limit" json:"rate_limit"`
+	Log            LogConfig            `yaml:"log,omitempty"`
+	Loki           LokiConfig           `yaml:"loki,omitempty"`
+	Server         ServerConfig         `yaml:"server,omitempty"`
+	Database       DatabaseConfig       `yaml:"database,omitempty"`
+	RateLimit      *RateLimitConfig     `yaml:"rate_limit" json:"rate_limit"`
+	CircuitBreaker *CircuitBreakerConfig `yaml:"circuit_breaker" json:"circuit_breaker"`
+	Gateway        *GatewayConfig       `yaml:"gateway" json:"gateway"`
 
 	// 添加配置锁，防止并发读写
 	ConfigLock sync.RWMutex `yaml:"-"`
@@ -43,13 +74,16 @@ type AppConfig struct {
 }
 
 // Validate 验证 AppConfig 配置的有效性
-func (c *AppConfig) Validate() error {
+func (c *AppConfig) Validate(isGateway bool) error {
 	if err := c.Server.Validate(); err != nil {
 		return fmt.Errorf("server config validation failed: %w", err)
 	}
 
-	if err := c.Database.Validate(); err != nil {
-		return fmt.Errorf("database config validation failed: %w", err)
+	// 网关服务不需要数据库配置
+	if !isGateway {
+		if err := c.Database.Validate(); err != nil {
+			return fmt.Errorf("database config validation failed: %w", err)
+		}
 	}
 
 	if c.RateLimit != nil {

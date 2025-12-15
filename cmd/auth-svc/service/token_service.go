@@ -1,25 +1,12 @@
 package service
 
 import (
+	"easyms/cmd/auth-svc/consts"
 	. "easyms/cmd/auth-svc/model"
 	"easyms/cmd/auth-svc/storage"
-	"errors"
 	"github.com/satori/go.uuid"
 	"strconv"
 	"time"
-)
-
-var (
-	// ErrNotSupportGrantType               授权类型不支持错误
-	ErrNotSupportGrantType = errors.New("grant type is not supported")
-	// ErrInvalidClient                       客户端信息错误错误
-	ErrInvalidClient = errors.New("invalid client")
-	// ErrInvalidUsernameAndPasswordRequest 用户名密码错误错误
-	ErrInvalidUsernameAndPasswordRequest = errors.New("invalid username, password")
-	// ErrInvalidTokenRequest               令牌错误错误
-	ErrInvalidTokenRequest = errors.New("invalid token")
-	// ErrExpiredToken                       令牌已过期错误
-	ErrExpiredToken = errors.New("token is expired")
 )
 
 type TokenService interface {
@@ -92,7 +79,7 @@ func (tokenService *DefaultTokenService) RefreshAccessToken(refreshTokenValue st
 	if err == nil {
 		// 判断刷新令牌是否已过期
 		if refreshToken.IsExpired() {
-			return nil, ErrExpiredToken
+			return nil, consts.ErrExpiredToken
 		}
 		// 读取刷新令牌对应的用户信息和客户端信息
 		oauth2Details, err := tokenService.tokenStore.ReadOAuth2DetailsForRefreshToken(refreshTokenValue)
@@ -120,7 +107,7 @@ func (tokenService *DefaultTokenService) GetOAuth2DetailsByAccessToken(tokenValu
 	accessToken, err := tokenService.tokenStore.ReadAccessToken(tokenValue)
 	if err == nil {
 		if accessToken.IsExpired() {
-			return nil, ErrExpiredToken
+			return nil, consts.ErrExpiredToken
 		}
 		return tokenService.tokenStore.ReadOAuth2Details(tokenValue)
 	}

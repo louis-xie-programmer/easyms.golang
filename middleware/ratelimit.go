@@ -2,7 +2,7 @@ package middleware
 
 import (
 	"easyms/pkg/config"
-	"easyms/pkg/entitis"
+	"easyms/pkg/entities"
 	"fmt"
 	"net"
 	"regexp"
@@ -13,8 +13,8 @@ import (
 )
 
 type LimiterManager struct {
-	ipRules        []entitis.IPLimitRule
-	uaRules        []entitis.UALimitRule
+	ipRules        []entities.IPLimitRule
+	uaRules        []entities.UALimitRule
 	ipLimiters     map[string]*rate.Limiter // CIDR -> limiter
 	uaLimiters     map[string]*rate.Limiter // Pattern -> limiter
 	defaultLimiter *rate.Limiter
@@ -22,8 +22,8 @@ type LimiterManager struct {
 }
 
 type ConsulRateLimitConfig struct {
-	IPLimits []entitis.IPLimitRule `yaml:"ip_limits" json:"ip_limits"`
-	UALimits []entitis.UALimitRule `yaml:"ua_limits" json:"ua_limits"`
+	IPLimits []entities.IPLimitRule `yaml:"ip_limits" json:"ip_limits"`
+	UALimits []entities.UALimitRule `yaml:"ua_limits" json:"ua_limits"`
 }
 
 // 初始化限流器管理器

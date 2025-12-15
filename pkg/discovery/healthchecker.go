@@ -116,3 +116,17 @@ func (s *ServiceHealthManager) HealthCheckWorker(addresses []string, interval ti
 		}
 	}
 }
+
+// SetHealthChecker 设置健康检查器
+func (s *ServiceHealthManager) SetHealthChecker(checker HealthChecker) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.checker = checker
+}
+
+// GetHealthChecker 获取健康检查器
+func (s *ServiceHealthManager) GetHealthChecker() HealthChecker {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	return s.checker
+}

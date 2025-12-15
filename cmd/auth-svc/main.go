@@ -1,14 +1,8 @@
-// main.go 认证服务主程序
-// 主要功能：
-// 1. 初始化服务配置
-// 2. 启动服务发现客户端
-// 3. 注册服务到Consul
-// 4. 初始化认证服务组件
-// 5. 启动HTTP服务
 package main
 
 import (
 	"easyms/cmd/auth-svc/handles"
+	"easyms/cmd/auth-svc/middleware"
 	"easyms/cmd/auth-svc/service"
 	"easyms/cmd/auth-svc/storage"
 	"easyms/pkg/config"
@@ -16,41 +10,34 @@ import (
 	"easyms/pkg/discovery"
 	"easyms/pkg/logger"
 	"fmt"
-	"github.com/gin-gonic/gin"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
-func init() {
-	// 初始化配置
-}
-
-// 认证服务名称
-var serverName = "auth-svc"
-
-// main 认证服务入口函数
-// 初始化配置、服务发现客户端，注册服务，初始化认证组件并启动HTTP服务
+// main 认证服务主函数
 func main() {
+	// 获取环境变量
+	// 认证服务名称和端口
+	serverName := "auth-svc"
+
 	// 初始化应用配置存储
 	// 读取 configs/app.yaml 配置文件
 	cfgStore, err := config.InitAppConfigStore()
 	if err != nil {
-		fmt.Println("Failed to initialize app config store")
 		logger.Error(err, "Failed to initialize app config store", serverName, nil)
 	}
 
-	// 初始化 Consul 服务发现客户端
-	// 连接到Consul服务注册与发现中心
-	d, err := discovery.NewDiscovery(cfgStore.Consul.Host)
+	// 创建 Discovery 客户端用于服务注册和配置加载
+	discoveryClient, err := discovery.NewDiscovery(cfgStore.Consul.Host)
 	if err != nil {
-		logger.Error(err, "Failed to create consul client", serverName, nil)
+		logger.Error(err, "Failed to create consul discovery client", serverName, nil)
 	}
 
-	fmt.Printf("Initializing %v\n", cfgStore)
 	// 加载服务配置
 	// 根据配置类型（本地或Consul）加载服务配置
-	err = config.LoadServiceConfig(d, cfgStore.Consul.KeyPath, cfgStore.StoreType, serverName, cfgStore.Env)
+	err = config.LoadServiceConfig(discoveryClient, cfgStore.Consul.KeyPath, cfgStore.StoreType, serverName, cfgStore.Env)
 	if err != nil {
-		fmt.Printf("Failed to load service config %s: %v\n", cfgStore, err)
 		logger.Error(err, "Failed to load service config", serverName, nil)
 	}
 
@@ -60,23 +47,6 @@ func main() {
 	// 初始化日志系统
 	// 根据配置初始化日志系统（本地或Loki）
 	logger.Init(serverName, appConfig)
-
-	fmt.Printf("Starting %s on %s port: %d\n", serverName, appConfig.Server.Host, appConfig.Server.Port)
-
-	// 注册服务到Consul
-	// 将当前服务注册到Consul服务注册中心
-	// 添加短暂延迟以避免服务注册冲突
-	time.Sleep(time.Millisecond * 100)
-	err = d.Register(serverName, appConfig.Server.Host, appConfig.Server.Port, nil)
-	if err != nil {
-		fmt.Printf("Failed to register service %v", appConfig)
-		logger.Error(err, "Failed to register service", serverName, nil)
-		//panic(err)
-	}
-
-	// 延迟注销服务
-	// 确保服务在退出时从Consul中注销
-	defer d.DeRegister(serverName)
 
 	// 初始化认证服务组件
 	// 初始化各种认证服务相关的组件
@@ -108,7 +78,7 @@ func main() {
 		}
 		time.Sleep(time.Second * time.Duration(i+1))
 	}
-	
+
 	if err != nil {
 		logger.Error(err, "Failed to connect to database", serverName, nil)
 		panic(err)
@@ -116,16 +86,16 @@ func main() {
 
 	// 初始化令牌存储器
 	// 使用JWT令牌存储器
-	tokenStore = storage.NewJwtTokenStore(tokenEnhancer.(*storage.JwtTokenEnhancer), dbase.(*db.EasyDatabase))
+	tokenStore = storage.NewJwtTokenStore(tokenEnhancer.(*storage.JwtTokenEnhancer), dbase)
 
 	// 初始化令牌服务
 	tokenService = service.NewTokenService(tokenStore, tokenEnhancer)
 
 	// 初始化用户详情服务
-	userDetailsService = service.NewPostgresUserDetailsService(dbase.(*db.EasyDatabase))
+	userDetailsService = service.NewPostgresUserDetailsService(dbase)
 
 	// 初始化客户端详情服务
-	clientDetailsService = service.NewPostgresClientDetailsService(dbase.(*db.EasyDatabase))
+	clientDetailsService = service.NewPostgresClientDetailsService(dbase)
 
 	// 初始化令牌授予器
 	tokenGranter = service.NewComposeTokenGranter(map[string]service.TokenGranter{
@@ -133,6 +103,19 @@ func main() {
 		"password":           service.NewUsernamePasswordTokenGranter("password", userDetailsService, tokenService),
 		"refresh_token":      service.NewRefreshGranter("refresh_token", tokenService),
 	})
+
+	// 注册服务到Consul
+	// 将当前服务注册到Consul服务注册中心
+	// 添加短暂延迟以避免服务注册冲突
+	time.Sleep(time.Millisecond * 200)
+	err = discoveryClient.Register(serverName, appConfig.Server.Host, appConfig.Server.Port, nil)
+	if err != nil {
+		panic(err)
+	}
+
+	// 延迟注销服务
+	// 确保服务在退出时从Consul中注销
+	defer discoveryClient.DeRegister(serverName)
 
 	// 启动 HTTP 服务
 	// 使用Gin框架启动HTTP服务
@@ -145,41 +128,25 @@ func main() {
 	})
 
 	// 初始化配置管理接口
-	configHandler := config.NewConfigHandler(d, serverName, cfgStore.Env)
+	configHandler := config.NewConfigHandler(discoveryClient, serverName, cfgStore.Env)
 	configHandler.RegisterConfigRoutes(g)
 
-	// 客户端认证路由组 - 用于获取客户端令牌
-	client_auth_r := g.Group("/c-auth")
-	client_auth_r.POST("/token", handles.MakeClientAuthorizationMiddleware(clientDetailsService), handles.MakeTokenEndpoint(tokenGranter))
-	// 客户端刷新令牌端点 - 用于刷新客户端令牌
-	client_auth_r.POST("/refresh", handles.MakeClientOnlyAuthorizationMiddleware(tokenService), handles.RefreshClientTokenEndpoint(tokenService))
+	// 第1步. 通过ClientId,ClientSecret 来获取客户端默认的授权令牌，注意默认用户直接存储在数据库中，通过客户端Id和ClientSecret进行认证，同时从数据库中查询默认用户信息，最终生成访问令牌
+	g.POST("/oauth2/token", handles.MakeTokenEndpoint(tokenGranter, clientDetailsService))
 
-	// OAuth2相关路由组
-	oauth2_router := g.Group("/oauth2")
-	// 登录端点 - 通过客户端认证后获取用户令牌
-	oauth2_router.POST("/login", handles.MakeClientOnlyAuthorizationMiddleware(tokenService), handles.LoginEndPoint(userDetailsService, tokenService))
-	// 用户令牌刷新端点 - 用于刷新用户令牌
-	oauth2_router.POST("/refresh", handles.MakeAuthorityAuthorizationMiddleware(tokenService), handles.RefreshTokenEndpoint(tokenService))
+	// 默认的客户端授权令牌刷新接口，默认用户信息存储在令牌中，未登录的用户直接使用默认令牌访问，当令牌快速过期时，可以通过此接口刷新令牌
+	g.POST("/oauth2/client-refresh", middleware.MakeSimpleClientMiddleware(tokenService), handles.RefreshTokenEndpoint(tokenService))
 
-	// API V1路由组
-	v1_router := g.Group("/api/v1")
-	// 添加用户权限验证中间件
-	v1_router.Use(handles.MakeAuthorityAuthorizationMiddleware(tokenService))
+	// 2. 面向客户端的用户登录接口，这里主要是通过默认令牌以及用户名和密码进行认证，其中令牌中客户端信息存储在客户端默认的令牌中从中间件中获取，用户名和密码通过json传值，生成用户访问令牌，
+	g.POST("/login", middleware.MakeSimpleClientMiddleware(tokenService), handles.LoginEndPoint(userDetailsService, tokenService))
 
-	v1_router.POST("/user/:id", func(c *gin.Context) {
-		c.String(200, "user id: "+c.Param("id"))
-	})
+	// 3. 通过用户授权令牌来获取刷新令牌，这里主要是通过用户授权令牌进行认证，生成新的访问令牌和刷新令牌，用户信息和客户端等信息存储在令牌中，从中间件中获取
+	g.POST("/oauth2/refresh", middleware.MakeAuthorityAuthorizationMiddleware(tokenService), handles.RefreshTokenEndpoint(tokenService))
 
-	// 仅为客户端凭证授权开放的资源组
-	client_only_router := v1_router.Group("/client-resources")
-	// 添加客户端专用授权中间件
-	client_only_router.Use(handles.MakeClientOnlyAuthorizationMiddleware(tokenService))
-
-	client_only_router.POST("/resource", func(c *gin.Context) {
-		c.String(200, "this resource is only accessible by client credentials grant")
-	})
-
-	// 启动HTTP服务
-	// 监听指定端口提供HTTP服务
-	g.Run(fmt.Sprintf(":%d", appConfig.Server.Port))
+	// 启动 HTTP 服务
+	// 监听指定端口提供服务
+	fmt.Printf("Starting %s on port %d\n", serverName, appConfig.Server.Port)
+	if err := g.Run(fmt.Sprintf(":%d", appConfig.Server.Port)); err != nil {
+		logger.Error(err, "Failed to start HTTP server", serverName, nil)
+	}
 }

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"easyms/cmd/auth-svc/consts"
 	. "easyms/cmd/auth-svc/model"
 )
 
@@ -22,16 +23,18 @@ func NewUsernamePasswordTokenGranter(grantType string, userDetailsService UserDe
 func (tokenGranter *UsernamePasswordTokenGranter) Grant(ctx context.Context,
 	grantType string, client *ClientDetails, reader *TokenRequest) (*OAuth2Token, error) {
 	if grantType != tokenGranter.supportGrantType {
-		return nil, ErrNotSupportGrantType
+		return nil, consts.ErrNotSupportGrantType
 	}
 
-	userDetailsService := tokenGranter.userDetailsService.(*PostgresUserDetailsService)
-
-	// 验证用户名密码是否正确
-	userDetails, err := userDetailsService.GetUserDetailByUsername(ctx, reader.Username, reader.Password)
-
+	// 加载用户详情
+	userDetails, err := tokenGranter.userDetailsService.LoadUserByUsername(reader.Username)
 	if err != nil {
-		return nil, ErrInvalidUsernameAndPasswordRequest
+		return nil, consts.ErrInvalidUsernameAndPasswordRequest
+	}
+
+	// 验证密码
+	if !userDetails.CheckPassword(reader.Password) {
+		return nil, consts.ErrInvalidUsernameAndPasswordRequest
 	}
 
 	// 根据用户信息和客户端信息生成访问令牌
@@ -39,5 +42,4 @@ func (tokenGranter *UsernamePasswordTokenGranter) Grant(ctx context.Context,
 		Client: client,
 		User:   userDetails,
 	})
-
 }

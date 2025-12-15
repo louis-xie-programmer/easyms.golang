@@ -14,6 +14,7 @@ import (
 	"easyms/pkg/logger"
 	"fmt"
 	"net/http"
+	"time"
 )
 
 // main API网关服务入口函数
@@ -42,9 +43,33 @@ func main() {
 	sd.WatchService("user-svc")
 	sd.WatchService("auth-svc")
 
+	// 创建 Discovery 客户端用于配置加载
+	discoveryClient, err := discovery.NewDiscovery(cfgStore.Consul.Host)
+	if err != nil {
+		logger.Error(err, "Failed to create consul discovery client", serverName, nil)
+	}
+
+	// 加载服务配置
+	// 根据配置类型（本地或Consul）加载服务配置
+	err = config.LoadServiceConfig(discoveryClient, cfgStore.Consul.KeyPath, cfgStore.StoreType, serverName, cfgStore.Env)
+	if err != nil {
+		fmt.Printf("Failed to load service config %s: %v\n", cfgStore, err)
+		logger.Error(err, "Failed to load service config", serverName, nil)
+	}
+
+	// 获取应用配置
+	appConfig := config.GetAppConfig()
+
+	// 初始化日志系统
+	// 根据配置初始化日志系统（本地或Loki）
+	logger.Init(serverName, appConfig)
+
 	// 创建API网关实例
 	// 初始化网关，传入服务发现客户端
 	gw := gateway.NewGateway(sd)
+	
+	// 更新网关配置
+	gw.UpdateConfig(appConfig)
 
 	// 启动HTTP服务
 	// 启动网关HTTP服务，监听指定端口
@@ -52,4 +77,18 @@ func main() {
 	if err := http.ListenAndServe(fmt.Sprintf(":%d", port), gw); err != nil {
 		fmt.Printf("Failed to start %s: %v\n", serverName, err)
 	}
+	
+	// 定期重新加载配置
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		
+		for range ticker.C {
+			appConfig := config.GetAppConfig()
+			if appConfig != nil {
+				gw.UpdateConfig(appConfig)
+				fmt.Println("Gateway configuration reloaded")
+			}
+		}
+	}()
 }

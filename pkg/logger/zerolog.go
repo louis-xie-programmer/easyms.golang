@@ -9,7 +9,7 @@
 package logger
 
 import (
-	"easyms/pkg/entitis"
+	"easyms/pkg/entities"
 	"os"
 	"path/filepath"
 	"strings"
@@ -122,7 +122,7 @@ func (z *ZerologLogger) rotateLogger() {
 // 参数:
 //
 //	entry - 日志条目
-func (z *ZerologLogger) writeLog(entry entitis.LogEntry) {
+func (z *ZerologLogger) writeLog(entry entities.LogEntry) {
 	event := z.logger.With().
 		Str("app", entry.Service).
 		Str("module", entry.Module).
@@ -148,7 +148,7 @@ func (z *ZerologLogger) writeLog(entry entitis.LogEntry) {
 // 参数:
 //
 //	logs - 日志条目
-func (l *ZerologLogger) Log(logs []entitis.LogEntry) error {
+func (l *ZerologLogger) Log(logs []entities.LogEntry) error {
 	for _, entry := range logs {
 		if !shouldLog(entry.Level) {
 			continue

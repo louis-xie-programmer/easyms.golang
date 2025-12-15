@@ -2,7 +2,7 @@ package config
 
 import (
 	"easyms/pkg/discovery"
-	"easyms/pkg/entitis"
+	"easyms/pkg/entities"
 	"fmt"
 	"net/http"
 
@@ -15,6 +15,7 @@ type ConfigHandler struct {
 	discovery  *discovery.Discovery
 	serverName string
 	env        string
+	configMgr  *ConfigurationManager
 }
 
 // NewConfigHandler 创建配置管理处理器
@@ -23,6 +24,7 @@ func NewConfigHandler(d *discovery.Discovery, serverName, env string) *ConfigHan
 		discovery:  d,
 		serverName: serverName,
 		env:        env,
+		configMgr:  NewConfigurationManager(nil),
 	}
 }
 
@@ -38,7 +40,10 @@ func (h *ConfigHandler) SaveVersion(c *gin.Context) {
 		return
 	}
 
-	versionID, err := SaveConfigVersion(h.discovery, h.serverName, h.env, req.Description)
+	// 获取当前服务是否为网关
+	isGateway := h.serverName == "gateway"
+	
+	versionID, err := h.configMgr.SaveConfigVersion(h.discovery, h.serverName, h.env, req.Description, isGateway)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -53,7 +58,10 @@ func (h *ConfigHandler) SaveVersion(c *gin.Context) {
 // ListVersions 获取配置版本列表
 // GET /config/versions
 func (h *ConfigHandler) ListVersions(c *gin.Context) {
-	versions, err := GetConfigVersions(h.discovery, h.serverName, h.env)
+	// 获取当前服务是否为网关
+	isGateway := h.serverName == "gateway"
+	
+	versions, err := h.configMgr.GetConfigVersions(h.discovery, h.serverName, h.env, isGateway)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -85,7 +93,7 @@ func (h *ConfigHandler) GetVersion(c *gin.Context) {
 		return
 	}
 
-	var version entitis.ConfigVersion
+	var version entities.ConfigVersion
 	err = yaml.Unmarshal([]byte(val), &version)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -100,7 +108,7 @@ func (h *ConfigHandler) GetVersion(c *gin.Context) {
 func (h *ConfigHandler) RollbackToVersion(c *gin.Context) {
 	versionID := c.Param("versionID")
 
-	err := RollbackToVersion(h.discovery, h.serverName, h.env, versionID)
+	err := h.configMgr.RollbackToVersion(h.discovery, h.serverName, h.env, versionID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -129,37 +137,26 @@ func (h *ConfigHandler) GetCurrentConfig(c *gin.Context) {
 // UpdateConfig 更新当前配置
 // PUT /config/current
 func (h *ConfigHandler) UpdateConfig(c *gin.Context) {
-	var newConfig entitis.AppConfig
+	var newConfig entities.AppConfig
 
 	if err := c.ShouldBindJSON(&newConfig); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
+	// 获取当前服务是否为网关
+	isGateway := h.serverName == "gateway"
+	
 	// 验证新配置
-	if err := newConfig.Validate(); err != nil {
+	if err := newConfig.Validate(isGateway); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Configuration validation failed: %v", err)})
 		return
 	}
 
-	// 将新配置保存到Consul
-	configData, err := yaml.Marshal(newConfig)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
+	// 更新配置
+	globalAppConfig = &newConfig
 
-	// 保存到Consul
-	configKey := fmt.Sprintf("easyms/%s/%s.yaml", h.env, h.serverName)
-	err = h.discovery.Put(configKey, string(configData))
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"message": "Configuration updated successfully. It will take effect on next reload cycle.",
-	})
+	c.JSON(http.StatusOK, gin.H{"message": "Configuration updated successfully"})
 }
 
 // RegisterConfigRoutes 注册配置管理路由

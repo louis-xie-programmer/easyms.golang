@@ -2,15 +2,9 @@ package service
 
 import (
 	"context"
+	"easyms/cmd/auth-svc/consts"
 	. "easyms/cmd/auth-svc/model"
 )
-
-type TokenRequest struct {
-	GrantType    string `json:"grant_type"`
-	Username     string `json:"username"`
-	Password     string `json:"password"`
-	RefreshToken string `json:"refresh_token"`
-}
 
 type TokenGranter interface {
 	// Grant 用于生成令牌
@@ -32,7 +26,7 @@ func (tokenGranter *ComposeTokenGranter) Grant(ctx context.Context, grantType st
 	dispatchGranter := tokenGranter.TokenGrantDict[grantType]
 
 	if dispatchGranter == nil {
-		return nil, ErrNotSupportGrantType
+		return nil, consts.ErrNotSupportGrantType
 	}
 
 	return dispatchGranter.Grant(ctx, grantType, client, reader)

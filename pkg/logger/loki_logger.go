@@ -9,7 +9,7 @@ package logger
 
 import (
 	"bytes"
-	"easyms/pkg/entitis"
+	"easyms/pkg/entities"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -39,7 +39,7 @@ type LokiLogger struct {
 // 2. 转换日志条目为Loki所需的格式
 // 3. 创建并发送包含认证信息的HTTP请求
 // 4. 处理响应结果及可能的错误
-func (l *LokiLogger) Log(logs []entitis.LogEntry) error {
+func (l *LokiLogger) Log(logs []entities.LogEntry) error {
 	// 初始化Loki日志流结构
 	// Loki要求特定的流格式，包含标签和值
 	stream := struct {
@@ -130,7 +130,7 @@ func (l *LokiLogger) Log(logs []entitis.LogEntry) error {
 //	*LokiLogger: 初始化后的LokiLogger指针
 //
 // 初始化结构体字段并配置HTTP客户端，设置5秒超时限制
-func NewLokiLogger(service string, cfg entitis.LokiConfig) *LokiLogger {
+func NewLokiLogger(service string, cfg entities.LokiConfig) *LokiLogger {
 	return &LokiLogger{
 		url:      cfg.URL,
 		service:  service,

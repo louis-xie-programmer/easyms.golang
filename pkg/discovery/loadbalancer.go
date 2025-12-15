@@ -38,13 +38,13 @@ func (r *RandomLoadBalancer) Select(instances []string) string {
 	return instances[rand.Intn(len(instances))]
 }
 
-// WeightedLoadBalancer 权重负载均衡器
-type WeightedLoadBalancer struct {
+// SimpleWeightedLoadBalancer 简单权重负载均衡器
+type SimpleWeightedLoadBalancer struct {
 	// 这里应该从服务元数据中获取权重信息
 	// 为了简化，我们假设所有实例具有相同权重
 }
 
-func (w *WeightedLoadBalancer) Select(instances []string) string {
+func (w *SimpleWeightedLoadBalancer) Select(instances []string) string {
 	if len(instances) == 0 {
 		return ""
 	}
@@ -118,4 +118,31 @@ func (i *IPHashLoadBalancer) Select(instances []string) string {
 	rand.Seed(time.Now().UnixNano())
 	hash := rand.Intn(len(instances))
 	return instances[hash]
+}
+
+// MetadataBasedLoadBalancer 基于元数据的负载均衡器
+type MetadataBasedLoadBalancer struct {
+	metadataKey   string
+	metadataValue string
+}
+
+// NewMetadataBasedLoadBalancer 创建基于元数据的负载均衡器
+func NewMetadataBasedLoadBalancer(metadataKey, metadataValue string) *MetadataBasedLoadBalancer {
+	return &MetadataBasedLoadBalancer{
+		metadataKey:   metadataKey,
+		metadataValue: metadataValue,
+	}
+}
+
+// Select 根据元数据选择实例
+func (m *MetadataBasedLoadBalancer) Select(instances []string) string {
+	// 这个实现需要访问服务发现中的元数据
+	// 由于接口限制，这里简化实现
+	if len(instances) == 0 {
+		return ""
+	}
+
+	// 如果没有元数据匹配要求，随机选择
+	rand.Seed(time.Now().UnixNano())
+	return instances[rand.Intn(len(instances))]
 }

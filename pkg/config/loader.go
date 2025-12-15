@@ -9,7 +9,6 @@ package config
 
 import (
 	"easyms/pkg/discovery"
-	"easyms/pkg/entitis"
 	"fmt"
 )
 
@@ -21,14 +20,10 @@ import (
 //   - storeType: 存储类型（local 或 consul）
 //   - serviceName: 服务名称
 //   - env: 环境标识（dev/prod）
+//
 // 返回值:
 //   - error: 操作成功返回nil，失败返回具体错误
 func LoadServiceConfig(client *discovery.Discovery, keyPath string, storeType string, serviceName, env string) error {
-	// 确保全局配置对象已初始化
-	if appConfig == nil {
-		appConfig = &entitis.AppConfig{}
-	}
-	
 	// 根据配置类型加载配置
 	// 支持Consul配置中心和本地配置文件两种方式
 	if storeType == "consul" && client != nil {
@@ -50,8 +45,10 @@ func LoadServiceConfig(client *discovery.Discovery, keyPath string, storeType st
 	}
 
 	// 验证配置的有效性
+	appConfig := GetAppConfig()
 	if appConfig != nil {
-		if err := appConfig.Validate(); err != nil {
+		isGateway := serviceName == "gateway"
+		if err := appConfig.Validate(isGateway); err != nil {
 			return fmt.Errorf("configuration validation failed: %w", err)
 		}
 	}

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"easyms/cmd/auth-svc/consts"
 	. "easyms/cmd/auth-svc/model"
 )
 
@@ -19,13 +20,13 @@ func NewRefreshGranter(grantType string, tokenService TokenService) TokenGranter
 
 func (tokenGranter *RefreshTokenGranter) Grant(ctx context.Context, grantType string, client *ClientDetails, reader *TokenRequest) (*OAuth2Token, error) {
 	if grantType != tokenGranter.supportGrantType {
-		return nil, ErrNotSupportGrantType
+		return nil, consts.ErrNotSupportGrantType
 	}
 	// 从请求中获取刷新令牌
 	refreshTokenValue := reader.RefreshToken
 
 	if refreshTokenValue == "" {
-		return nil, ErrInvalidTokenRequest
+		return nil, consts.ErrInvalidTokenRequest
 	}
 
 	// 刷新令牌

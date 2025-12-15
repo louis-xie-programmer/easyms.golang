@@ -50,10 +50,10 @@ type TokenStore interface {
 //
 // 返回值:
 //   - TokenStore: 令牌存储实例
-func NewJwtTokenStore(jwtTokenEnhancer *JwtTokenEnhancer, db *db.EasyDatabase) TokenStore {
+func NewJwtTokenStore(jwtTokenEnhancer *JwtTokenEnhancer, db db.Database) TokenStore {
 	// 自动迁移创建撤销令牌表
 	if db != nil {
-		err := db.DB.AutoMigrate(&RevokedToken{})
+		err := db.AutoMigrate(&RevokedToken{})
 		if err != nil {
 			// 如果迁移失败，记录日志但继续执行
 			// 在实际应用中应该有更好的错误处理机制
@@ -70,7 +70,7 @@ func NewJwtTokenStore(jwtTokenEnhancer *JwtTokenEnhancer, db *db.EasyDatabase) T
 // JwtTokenStore JWT令牌存储实现
 type JwtTokenStore struct {
 	jwtTokenEnhancer *JwtTokenEnhancer // JWT令牌增强器
-	db               *db.EasyDatabase  // 数据库实例
+	db               db.Database       // 数据库实例
 }
 
 // ReadAccessToken 根据令牌值获取访问令牌结构体
@@ -126,7 +126,7 @@ func (tokenStore *JwtTokenStore) RemoveAccessToken(tokenValue string) {
 	if tokenStore.db != nil {
 		// 检查令牌是否已经在黑名单中
 		var count int64
-		err := tokenStore.db.DB.Model(&RevokedToken{}).Where("token_value = ?", tokenValue).Count(&count).Error
+		err := tokenStore.db.GetDB().Model(&RevokedToken{}).Where("token_value = ?", tokenValue).Count(&count).Error
 
 		if err == nil && count == 0 {
 			// 令牌不在黑名单中，才进行解析和插入操作
@@ -154,7 +154,7 @@ func (tokenStore *JwtTokenStore) RemoveRefreshToken(tokenValue string) {
 	if tokenStore.db != nil {
 		// 检查令牌是否已经在黑名单中
 		var count int64
-		err := tokenStore.db.DB.Model(&RevokedToken{}).Where("token_value = ?", tokenValue).Count(&count).Error
+		err := tokenStore.db.GetDB().Model(&RevokedToken{}).Where("token_value = ?", tokenValue).Count(&count).Error
 
 		if err == nil && count == 0 {
 			// 令牌不在黑名单中，才进行插入操作
@@ -233,7 +233,7 @@ func (tokenStore *JwtTokenStore) IsAccessTokenRevoked(tokenValue string) (bool, 
 
 	// 查询数据库检查令牌是否在撤销列表中
 	var count int64
-	err := tokenStore.db.DB.Model(&RevokedToken{}).Where("token_value = ?", tokenValue).Count(&count).Error
+	err := tokenStore.db.GetDB().Model(&RevokedToken{}).Where("token_value = ?", tokenValue).Count(&count).Error
 	if err != nil {
 		return false, err
 	}
@@ -256,7 +256,7 @@ func (tokenStore *JwtTokenStore) IsRefreshTokenRevoked(tokenValue string) (bool,
 
 	// 查询数据库检查令牌是否在撤销列表中
 	var count int64
-	err := tokenStore.db.DB.Model(&RevokedToken{}).Where("token_value = ?", tokenValue).Count(&count).Error
+	err := tokenStore.db.GetDB().Model(&RevokedToken{}).Where("token_value = ?", tokenValue).Count(&count).Error
 	if err != nil {
 		return false, err
 	}

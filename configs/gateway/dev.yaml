@@ -1,0 +1,28 @@
+server:
+  host: "0.0.0.0"
+  port: 10000
+
+rate_limit:
+  default_rate: 100
+  default_burst: 200
+  ip_limits:
+    - cidr: "192.168.1.0/24"
+      rate: 50
+      burst: 100
+  ua_limits:
+    - pattern: "bot"
+      rate: 10
+      burst: 20
+
+circuit_breaker:
+  services:
+    user-svc:
+      counter_reset_interval: 30
+      half_open_max_successes: 2
+      failure_rate_window: 10
+      failure_rate_threshold: 0.5
+    auth-svc:
+      counter_reset_interval: 60
+      half_open_max_successes: 3
+      failure_rate_window: 15
+      failure_rate_threshold: 0.3

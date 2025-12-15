@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"easyms/cmd/auth-svc/consts"
 	. "easyms/cmd/auth-svc/model"
 )
 
@@ -22,18 +23,23 @@ func NewClientCredentialsTokenGranter(grantType string, clientService ClientDeta
 
 func (tokenGranter *ClientCredentialsTokenGranter) Grant(ctx context.Context, grantType string, client *ClientDetails, reader *TokenRequest) (*OAuth2Token, error) {
 	if grantType != tokenGranter.supportGrantType {
-		return nil, ErrNotSupportGrantType
+		return nil, consts.ErrNotSupportGrantType
 	}
 
-	_, err := tokenGranter.clientService.GetClientDetailByClientId(ctx, client.ClientId, client.ClientSecret)
-
+	// 根据客户端ID加载客户端详情
+	clientDetails, err := tokenGranter.clientService.LoadClientByClientId(client.ClientId)
 	if err != nil {
-		return nil, ErrInvalidClient
+		return nil, consts.ErrInvalidClient
+	}
+
+	// 验证客户端密钥
+	if clientDetails.ClientSecret != client.ClientSecret {
+		return nil, consts.ErrInvalidClient
 	}
 
 	// 创建客户统一端访问令牌
 	return tokenGranter.tokenService.CreateAccessToken(&OAuth2Details{
-		Client: client,
+		Client: clientDetails,
 		User:   nil,
 	})
 }

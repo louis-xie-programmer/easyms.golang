@@ -2,12 +2,12 @@ package config
 
 import (
 	"easyms/pkg/discovery"
-	"easyms/pkg/entitis"
+	"easyms/pkg/entities"
 	"fmt"
 	"gopkg.in/yaml.v2"
-	"time"
 	"reflect"
 	"sync"
+	"time"
 )
 
 // ConfigWatcher 配置监听器
@@ -17,11 +17,12 @@ type ConfigWatcher struct {
 	keyPath     string
 	serverName  string
 	env         string
-	onChange    func(*entitis.AppConfig)
+	onChange    func(*entities.AppConfig)
 	stopCh      chan struct{}
 	ticker      *time.Ticker
 	mu          sync.RWMutex
 	lastConfigs map[string]string // 存储上次配置值，用于比较变化
+	configMgr   *ConfigurationManager
 }
 
 // ConfigWatcherInterface 配置监听器接口
@@ -34,7 +35,7 @@ type ConfigWatcherInterface interface {
 func NewConfigWatcher(
 	client *discovery.Discovery,
 	keyPath, serverName, env string,
-	onChange func(*entitis.AppConfig)) *ConfigWatcher {
+	onChange func(*entities.AppConfig)) *ConfigWatcher {
 	return &ConfigWatcher{
 		client:      client,
 		keyPath:     keyPath,
@@ -43,18 +44,19 @@ func NewConfigWatcher(
 		onChange:    onChange,
 		stopCh:      make(chan struct{}),
 		lastConfigs: make(map[string]string),
+		configMgr:   NewConfigurationManager(nil),
 	}
 }
 
 // Start 启动配置监听器
 func (cw *ConfigWatcher) Start() {
-	// 创建定时器，每隔10秒检查一次配置变化
-	cw.ticker = time.NewTicker(10 * time.Second)
-	
+	// 创建定时器，每隔5秒检查一次配置变化（比原来更频繁以提高响应速度）
+	cw.ticker = time.NewTicker(5 * time.Second)
+
 	go func() {
 		// 立即检查一次
 		cw.checkConfigChange()
-		
+
 		for {
 			select {
 			case <-cw.ticker.C:
@@ -78,13 +80,13 @@ func (cw *ConfigWatcher) Stop() {
 func (cw *ConfigWatcher) checkConfigChange() {
 	// 获取当前配置键列表
 	appKeys := GetConsulAppConfigKey(cw.keyPath, cw.serverName, cw.env)
-	
+
 	// 临时存储新配置
-	newConfig := &entitis.AppConfig{}
-	
+	newConfig := &entities.AppConfig{}
+
 	// 是否有配置发生变化
 	configChanged := false
-	
+
 	// 遍历所有配置键
 	for _, key := range appKeys {
 		val, err := cw.client.Get(key)
@@ -96,67 +98,66 @@ func (cw *ConfigWatcher) checkConfigChange() {
 			fmt.Printf("Config key not found: %s\n", key)
 			continue
 		}
-		
+
 		// 检查配置值是否有变化
 		cw.mu.RLock()
 		lastVal, exists := cw.lastConfigs[key]
 		cw.mu.RUnlock()
-		
+
 		if !exists || lastVal != val {
 			configChanged = true
 			cw.mu.Lock()
 			cw.lastConfigs[key] = val
 			cw.mu.Unlock()
-			
+
 			fmt.Printf("Detected config change for key: %s\n", key)
 		}
-		
-		var cfg entitis.AppConfig
+
+		var cfg entities.AppConfig
 		// 解析配置
 		err = yaml.Unmarshal([]byte(val), &cfg)
 		if err != nil {
 			fmt.Printf("Failed to unmarshal config: %v\n", err)
 			continue
 		}
-		
+
 		// 深度合并配置
-		if cfg.Log != (entitis.LogConfig{}) {
-			newConfig.Log = cfg.Log
-		}
-		if cfg.Loki != (entitis.LokiConfig{}) {
-			newConfig.Loki = cfg.Loki
-		}
-		if cfg.Server != (entitis.ServerConfig{}) {
-			newConfig.Server = cfg.Server
-		}
-		if cfg.Database != (entitis.DatabaseConfig{}) {
-			newConfig.Database = cfg.Database
-		}
-		if cfg.RateLimit != nil {
-			newConfig.RateLimit = cfg.RateLimit
-		}
+		cw.configMgr.MergeConfigs(newConfig, &cfg)
 	}
-	
-	// 如果配置发生了变化，则触发变更回调
-	if configChanged && cw.isConfigChanged(newConfig) {
-		// 验证新配置
-		if err := newConfig.Validate(); err != nil {
-			fmt.Printf("New config validation failed: %v\n", err)
+
+	// 如果配置发生了变化
+	if configChanged {
+		// 获取当前服务是否为网关
+		isGateway := cw.serverName == "gateway"
+		
+		// 验证配置
+		if err := newConfig.Validate(isGateway); err != nil {
+			fmt.Printf("Invalid config detected: %v\n", err)
 			return
 		}
-		
-		fmt.Println("Config changed, triggering update...")
-		cw.onChange(newConfig)
+
+		fmt.Println("Configuration reloaded successfully")
+
+		// 触发配置变更回调
+		if cw.onChange != nil {
+			cw.onChange(newConfig)
+		}
 	}
 }
 
 // isConfigChanged 检查配置是否发生变化
-func (cw *ConfigWatcher) isConfigChanged(newConfig *entitis.AppConfig) bool {
+func (cw *ConfigWatcher) isConfigChanged(newConfig *entities.AppConfig) bool {
 	currentConfig := GetAppConfig()
 	if currentConfig == nil {
 		return true
 	}
-	
+
 	// 比较配置是否发生变化
 	return !reflect.DeepEqual(currentConfig, newConfig)
+}
+
+// ForceReload 强制重新加载配置
+func (cw *ConfigWatcher) ForceReload() {
+	fmt.Println("Forcing config reload...")
+	cw.checkConfigChange()
 }

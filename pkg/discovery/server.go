@@ -25,6 +25,7 @@ type ServiceDiscovery struct {
 	client *api.Client                 // Consul 客户端
 
 	services map[string][]string       // 服务实例列表，key为服务名，value为实例地址列表
+	serviceDetails map[string][]*api.AgentService // 服务实例详细信息
 	lbIndex  map[string]int            // 负载均衡索引，记录每个服务的轮询位置
 
 	lock sync.RWMutex                  // 读写锁，保护服务实例列表的并发访问
@@ -38,6 +39,9 @@ type ServiceDiscovery struct {
 	
 	// 健康检查管理器
 	healthManager *ServiceHealthManager
+	
+	// 权重负载均衡器
+	weightedLoadBalancer *WeightedLoadBalancer
 }
 
 // NewServiceDiscovery 创建新的服务发现客户端
@@ -63,10 +67,12 @@ func NewServiceDiscovery(addr string) (*ServiceDiscovery, error) {
 	sd := &ServiceDiscovery{
 		client:        client,
 		services:      make(map[string][]string),
+		serviceDetails: make(map[string][]*api.AgentService),
 		lbIndex:       make(map[string]int),
 		breakers:      make(map[string]*gobreaker.CircuitBreaker),
 		loadBalancers: make(map[string]LoadBalanceStrategy),
 		healthManager: healthManager,
+		weightedLoadBalancer: NewWeightedLoadBalancer(),
 	}
 
 	// 默认使用轮询负载均衡策略
@@ -196,16 +202,39 @@ func (d *ServiceDiscovery) WatchService(serviceName string) {
 				// 提取服务实例地址列表
 				// 从服务条目中提取地址和端口，组合成完整的地址字符串
 				addresses := make([]string, 0)
+				serviceDetails := make([]*api.AgentService, 0)
 				for _, entry := range entries {
 					addr := entry.Service.Address
 					port := entry.Service.Port
 					addresses = append(addresses, addr+":"+portString(port))
+					serviceDetails = append(serviceDetails, entry.Service)
+					
+					// 更新权重负载均衡器中的实例信息
+					weight := 1
+					// 注意：这里简化处理，实际应该从entry.Service.Tags或其他地方获取权重
+					/*
+					if entry.Service.Weights != nil {
+						weight = entry.Service.Weights.Passing
+					}
+					*/
+					
+					metadata := entry.Service.Meta
+					if metadata == nil {
+						metadata = make(map[string]string)
+					}
+					
+					d.weightedLoadBalancer.AddInstance(
+						addr+":"+portString(port),
+						weight,
+						metadata,
+					)
 				}
 
 				// 更新服务实例列表
 				// 加锁确保并发安全
 				d.lock.Lock()
 				d.services[serviceName] = addresses
+				d.serviceDetails[serviceName] = serviceDetails
 				d.lock.Unlock()
 
 				// 启动健康检查工作协程（如果还没有运行）
@@ -279,6 +308,53 @@ func (d *ServiceDiscovery) GetServiceWithStrategy(serviceName string, strategy L
 	}
 
 	return strategy.Select(healthyInstances)
+}
+
+// GetWeightedService 使用权重负载均衡策略获取服务实例
+// 参数:
+//   - serviceName: 服务名称
+// 返回值:
+//   - string: 服务实例地址
+func (d *ServiceDiscovery) GetWeightedService(serviceName string) string {
+	d.lock.RLock()
+	instances := d.services[serviceName]
+	d.lock.RUnlock()
+
+	if len(instances) == 0 {
+		return ""
+	}
+
+	// 过滤不健康的实例
+	healthyInstances := make([]string, 0)
+	for _, instance := range instances {
+		if d.healthManager.IsHealthy(instance) {
+			healthyInstances = append(healthyInstances, instance)
+		}
+	}
+
+	if len(healthyInstances) == 0 {
+		// 如果没有健康实例，返回第一个实例（降级处理）
+		return instances[0]
+	}
+
+	// 使用权重负载均衡策略选择服务实例
+	return d.weightedLoadBalancer.Select(healthyInstances)
+}
+
+// GetServiceDetails 获取服务实例详细信息
+// 参数:
+//   - serviceName: 服务名称
+// 返回值:
+//   - []*api.AgentService: 服务实例详细信息列表
+func (d *ServiceDiscovery) GetServiceDetails(serviceName string) []*api.AgentService {
+	d.lock.RLock()
+	defer d.lock.RUnlock()
+	
+	if details, exists := d.serviceDetails[serviceName]; exists {
+		return details
+	}
+	
+	return nil
 }
 
 // GetBreaker 获取服务对应的熔断器
