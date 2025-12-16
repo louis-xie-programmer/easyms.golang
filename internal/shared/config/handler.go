@@ -7,7 +7,6 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"gopkg.in/yaml.v2"
 )
 
 // ConfigHandler 配置管理处理器
@@ -19,12 +18,12 @@ type ConfigHandler struct {
 }
 
 // NewConfigHandler 创建配置管理处理器
-func NewConfigHandler(d *discovery.Discovery, serverName, env string) *ConfigHandler {
+func NewConfigHandler(d *discovery.Discovery, appConfigProvider AppConfigProvider, serverName, env string) *ConfigHandler {
 	return &ConfigHandler{
 		discovery:  d,
 		serverName: serverName,
 		env:        env,
-		configMgr:  NewConfigurationManager(nil),
+		configMgr:  NewConfigurationManager(appConfigProvider),
 	}
 }
 
@@ -80,23 +79,9 @@ func (h *ConfigHandler) ListVersions(c *gin.Context) {
 func (h *ConfigHandler) GetVersion(c *gin.Context) {
 	versionID := c.Param("versionID")
 
-	// 获取版本信息
-	key := fmt.Sprintf("easyms/versions/%s/%s/%s", h.env, h.serverName, versionID)
-	val, err := h.discovery.Get(key)
+	version, err := h.configMgr.GetConfigVersion(h.discovery, h.serverName, h.env, versionID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	if val == "" {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Version not found"})
-		return
-	}
-
-	var version entities.ConfigVersion
-	err = yaml.Unmarshal([]byte(val), &version)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -141,15 +126,6 @@ func (h *ConfigHandler) UpdateConfig(c *gin.Context) {
 
 	if err := c.ShouldBindJSON(&newConfig); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	// 获取当前服务是否为网关
-	isGateway := h.serverName == "gateway"
-
-	// 验证新配置
-	if err := newConfig.Validate(isGateway); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Configuration validation failed: %v", err)})
 		return
 	}
 

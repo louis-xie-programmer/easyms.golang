@@ -4,6 +4,9 @@
 > **项目定位：生产可用、模块化、工程治理完备的 Golang 微服务架构实践与样例项目**  
 > **目标受众：后端架构师、Golang 工程师、DevOps 实践者、团队技术负责人**
 
+[![Go Report Card](https://goreportcard.com/badge/github.com/yourusername/easyms)](https://goreportcard.com/report/github.com/yourusername/easyms)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 ---
 以下是当前相关的博文，结合博文，可快速了解本系统的核心功能和实现原理, 后续会持续更新，欢迎大家扫码关注"代码扳手"公众号，获取更多技术交流信息。
 
@@ -28,52 +31,64 @@
 
 ```
 .
-├── configs/              # 配置文件
-│   ├── app.yaml          # 应用基本配置
-│   ├── share/            # 共享配置
-│   │   ├── dev.yaml      # 开发环境共享配置
-│   │   └── prod.yaml     # 生产环境共享配置
-│   ├── auth-svc/         # 认证服务配置
-│   │   ├── dev.yaml      # 开发环境配置
-│   │   └── prod.yaml     # 生产环境配置
-│   └── user-svc/         # 用户服务配置
-│       ├── dev.yaml      # 开发环境配置
-│       └── prod.yaml     # 生产环境配置
-├── deploy/               # 部署相关文件
-│   └── docker/           # Docker部署文件
-├── internal/             # 内部包（不允许外部导入）
-│   ├── platform/         # 平台级服务
-│   │   ├── gateway/      # API网关
-│   │   │   ├── main/     # 网关服务入口
-│   │   │   └── ...       # 网关相关实现
-│   │   └── migrate/      # 数据库迁移工具
-│   ├── services/         # 业务服务
-│   │   ├── auth/         # 认证服务
-│   │   │   ├── cmd/      # 服务入口
-│   │   │   │   └── authsvc/ # 认证服务主程序
-│   │   │   └── internal/ # 服务私有代码
-│   │   │       ├── consts/   # 常量定义
-│   │   │       ├── domain/   # 领域模型
-│   │   │       ├── handles/  # 处理函数
+├── configs/                    # 配置文件
+│   ├── app.yaml               # 应用基本配置
+│   ├── share/                 # 共享配置
+│   │   ├── dev.yaml           # 开发环境共享配置
+│   │   └── prod.yaml          # 生产环境共享配置
+│   ├── auth-svc/              # 认证服务配置
+│   │   ├── dev.yaml           # 开发环境配置
+│   │   └── prod.yaml          # 生产环境配置
+│   ├── gateway/               # 网关服务配置
+│   │   ├── dev.yaml           # 开发环境配置
+│   │   └── routes.yaml        # 路由配置
+│   └── user-svc/              # 用户服务配置
+│       ├── dev.yaml           # 开发环境配置
+│       └── prod.yaml          # 生产环境配置
+├── deploy/                    # 部署相关文件
+│   └── docker/                # Docker部署文件
+│       ├── docker-compose.yaml # Docker Compose配置
+│       └── promtail/          # Promtail配置
+├── internal/                  # 内部包（不允许外部导入）
+│   ├── platform/              # 平台级服务
+│   │   ├── gateway/           # API网关
+│   │   │   ├── main/          # 网关服务入口
+│   │   │   ├── Dockerfile     # 网关Dockerfile
+│   │   │   └── gateway.go     # 网关核心实现
+│   │   ├── migrate/           # 数据库迁移工具
+│   │   │   └── main.go        # 迁移工具入口
+│   │   └── push-config/       # 配置推送工具
+│   │       └── main.go        # 配置推送入口
+│   ├── services/              # 业务服务
+│   │   ├── auth/              # 认证服务
+│   │   │   ├── cmd/           # 服务入口
+│   │   │   │   └── authsvc/   # 认证服务主程序
+│   │   │   │       └── main.go # 认证服务入口
+│   │   │   ├── configs/       # 认证服务配置
+│   │   │   └── internal/      # 服务私有代码
+│   │   │       ├── consts/    # 常量定义
+│   │   │       ├── handles/   # 处理函数
 │   │   │       ├── middleware/ # 中间件
-│   │   │       ├── model/     # 数据模型
 │   │   │       ├── service/   # 业务逻辑
 │   │   │       └── storage/   # 数据存储
-│   │   └── user/         # 用户服务
-│   │       ├── cmd/      # 服务入口
-│   │       │   └── usersvc/ # 用户服务主程序
-│   │       └── internal/ # 服务私有代码
-│   └── shared/           # 共享组件
-│       ├── config/       # 配置管理
-│       ├── db/           # 数据库访问
-│       ├── discovery/    # 服务发现
-│       ├── logger/       # 日志系统
-│       └── middleware/   # 中间件
-├── migrations/           # 数据库迁移脚本
-├── pkg/                  # 公共包（可被外部导入）
-│   └── models/           # 共享数据模型
-└── ...                   # 其他文件
+│   │   └── user/              # 用户服务
+│   │       ├── cmd/           # 服务入口
+│   │       │   └── usersvc/   # 用户服务主程序
+│   │       │       └── main.go # 用户服务入口
+│   │       ├── configs/       # 用户服务配置
+│   │       └── internal/      # 服务私有代码
+│   └── shared/                # 共享组件
+│       ├── config/            # 配置管理
+│       ├── db/                # 数据库访问
+│       ├── discovery/         # 服务发现
+│       ├── entities/          # 实体定义
+│       ├── logger/            # 日志系统
+│       ├── middleware/        # 中间件
+│       └── models/            # 数据模型
+├── migrations/                # 数据库迁移脚本
+└── Makefile                   # 构建脚本
 ```
+
 
 ## 二、架构总览
 
@@ -111,7 +126,7 @@ consul:
 
 ### 3. 日志规范
 
-```go
+``go
 // internal/shared/logger 实现
 logger.Info().Str("service", "server1").Msg("Service started")
 ```
@@ -230,7 +245,7 @@ Redis 缓存穿透、击穿、雪崩防护机制，保障系统稳定性。
 
 在 `configs/app.yaml` 中启用配置热更新：
 
-```yaml
+```
 consul:
   reload_on_changes: true
 ```
@@ -420,7 +435,7 @@ make help
 
 ### 2. 目录结构
 
-```text
+```
 .
 ├── configs/              # 配置文件
 │   ├── app.yaml          # 应用基本配置

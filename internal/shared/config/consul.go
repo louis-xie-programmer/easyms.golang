@@ -1,9 +1,12 @@
+// config.go
+// 配置管理模块
 package config
 
 import (
 	"easyms/internal/shared/discovery"
 	"easyms/internal/shared/entities"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 
@@ -15,7 +18,6 @@ type ConsulConfig struct {
 	ServerName string
 	Env        string
 	AppKeyPath string
-	watcher    *ConfigWatcher
 	mutex      sync.Mutex
 	configMgr  *ConfigurationManager
 }
@@ -37,6 +39,14 @@ func NewConsulConfig(client *discovery.Discovery, serviceName, keyPath, env stri
 	}
 }
 
+func (cc *ConsulConfig) OnChange() func(newConfig *entities.AppConfig) {
+	// 更新配置
+	fmt.Println("Updating config...")
+	return func(newConfig *entities.AppConfig) {
+		cc.configMgr.UpdateConfig(newConfig)
+	}
+}
+
 // LoadAppConfig 从Consul加载配置并合并
 func (cc *ConsulConfig) LoadAppConfig() error {
 	cc.mutex.Lock()
@@ -45,7 +55,7 @@ func (cc *ConsulConfig) LoadAppConfig() error {
 	// consul appConfig
 	appKeys := GetConsulAppConfigKey(cc.AppKeyPath, cc.ServerName, cc.Env)
 
-	currentAppConfig := cc.configMgr.GetConfig()
+	newConfig := &entities.AppConfig{}
 	for _, key := range appKeys {
 		val, err := cc.Client.Get(key)
 		if err != nil {
@@ -62,49 +72,24 @@ func (cc *ConsulConfig) LoadAppConfig() error {
 		}
 
 		// 深度合并配置
-		cc.configMgr.MergeConfigs(currentAppConfig, &cfg)
+		if err := cc.configMgr.MergeConfigs(newConfig, &cfg); err != nil {
+			log.Printf("Failed to merge config from key %s: %v", key, err)
+			// Decide if you want to continue or return an error
+			return fmt.Errorf("failed to merge config from key %s: %w", key, err)
+		}
 	}
 
-	// 确保至少有基本配置
-	isGateway := cc.ServerName == "gateway"
-	cc.configMgr.EnsureBasicConfig(currentAppConfig, isGateway)
-
-	// 更新全局配置
-	globalAppConfig = currentAppConfig
-
-	// 验证配置的有效性
-	if err := globalAppConfig.Validate(isGateway); err != nil {
-		return fmt.Errorf("configuration validation failed: %w", err)
-	}
+	// Update the config in the manager, which in turn updates the global config
+	// This ensures thread-safe update.
+	cc.configMgr.UpdateConfig(newConfig)
+	globalAppConfig = newConfig // This should be updated via the manager
 
 	return nil
 }
 
-// startWatcher 启动配置监听器
-func (cc *ConsulConfig) startWatcher() {
-	if cc.watcher != nil {
-		// 如果监听器已经存在，先停止它
-		cc.watcher.Stop()
-	}
-
-	// 创建新的监听器
-	cc.watcher = NewConfigWatcher(cc.Client, cc.AppKeyPath, cc.ServerName, cc.Env, cc.onConfigChange)
-
-	// 启动监听器
-	cc.watcher.Start()
-}
-
-// onConfigChange 配置变更回调函数
-func (cc *ConsulConfig) onConfigChange(newConfig *entities.AppConfig) {
-	cc.mutex.Lock()
-	defer cc.mutex.Unlock()
-
-	// 更新全局配置
-	globalAppConfig = newConfig
-
-	fmt.Println("Configuration reloaded successfully")
-}
-
 func GetConsulAppConfigKey(keyPath string, serverName string, env string) []string {
-	return strings.Split(fmt.Sprintf(keyPath, env, env), "")
+	// 解析 keyPath 中的变量
+	keyPath = strings.ReplaceAll(keyPath, "${env}", env)
+	keyPath = strings.ReplaceAll(keyPath, "${server_name}", serverName)
+	return strings.Split(keyPath, ";")
 }

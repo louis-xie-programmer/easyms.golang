@@ -4,7 +4,7 @@ log:
 loki:
   url: http://172.29.16.1:3100/loki/api/v1/push
   username: easy
-  password: easyms
+  password: easymPhase
 database:
   type: postgres
   host: 172.29.16.1

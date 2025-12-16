@@ -1,6 +1,6 @@
 env: dev
-store_type: local
+store_type: consul
 consul:
   host: "localhost:8500"
-  key_path: easyms/%s/%s
+  key_path: easyms/share/${env};easyms/${server_name}/${env}
   reload_on_changes: true

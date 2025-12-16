@@ -1,3 +1,4 @@
+// local.go
 package config
 
 import (
@@ -26,6 +27,13 @@ func NewLocalConfig(serviceName string, env string) AppConfigProvider {
 		ServerName: serviceName,
 		Env:        env,
 		configMgr:  NewConfigurationManager(nil),
+	}
+}
+
+func (lc *LocalConfig) OnChange() func(*entities.AppConfig) {
+	// 暂时只在consul中更新配置
+	// lc.configMgr.UpdateConfig(newConfig)
+	return func(newConfig *entities.AppConfig) {
 	}
 }
 

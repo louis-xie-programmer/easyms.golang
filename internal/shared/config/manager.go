@@ -1,13 +1,20 @@
+// config.go
+// 配置管理模块
 package config
 
 import (
 	"easyms/internal/shared/discovery"
 	"easyms/internal/shared/entities"
 	"fmt"
-	"gopkg.in/yaml.v2"
+	"log"
 	"sync"
 	"time"
+
+	"dario.cat/mergo"
+	"gopkg.in/yaml.v2"
 )
+
+var now = time.Now // For testability
 
 // ConfigurationManager 配置管理器，统一管理配置的加载、合并和更新
 type ConfigurationManager struct {
@@ -42,28 +49,14 @@ func (cm *ConfigurationManager) UpdateConfig(newConfig *entities.AppConfig) {
 	cm.configLock.Lock()
 	defer cm.configLock.Unlock()
 	cm.appConfig = newConfig
+
+	fmt.Println("Configuration updated!")
 }
 
 // MergeConfigs 合并配置，将source配置合并到target配置中
-func (cm *ConfigurationManager) MergeConfigs(target, source *entities.AppConfig) {
-	if source.Log != (entities.LogConfig{}) {
-		target.Log = source.Log
-	}
-	if source.Loki != (entities.LokiConfig{}) {
-		target.Loki = source.Loki
-	}
-	if source.Server != (entities.ServerConfig{}) {
-		target.Server = source.Server
-	}
-	if source.Database != (entities.DatabaseConfig{}) {
-		target.Database = source.Database
-	}
-	if source.RateLimit != nil {
-		target.RateLimit = source.RateLimit
-	}
-	if source.OAuth2 != (entities.OAuth2Config{}) {
-		target.OAuth2 = source.OAuth2
-	}
+func (cm *ConfigurationManager) MergeConfigs(target, source *entities.AppConfig) error {
+	// Use deep merge to avoid losing partial configurations.
+	return mergo.Merge(target, source, mergo.WithOverride)
 }
 
 // EnsureBasicConfig 确保配置包含基本项
@@ -107,7 +100,7 @@ func (cm *ConfigurationManager) SaveConfigVersion(d *discovery.Discovery, server
 	// 创建版本信息
 	versionInfo := entities.ConfigVersion{
 		VersionID:   versionID,
-		Timestamp:   getCurrentTime(),
+		Timestamp:   now(),
 		Description: description,
 		ConfigData:  string(configData),
 	}
@@ -161,7 +154,8 @@ func (cm *ConfigurationManager) GetConfigVersions(d *discovery.Discovery, server
 		}
 
 		if err := config.Validate(isGateway); err != nil {
-			return nil, fmt.Errorf("config validation failed for version %s: %w", version.VersionID, err)
+			log.Printf("warning: config validation failed for version %s, skipping: %v", version.VersionID, err)
+			continue // Skip invalid versions but continue processing others
 		}
 
 		versions = append(versions, &version)
@@ -170,21 +164,31 @@ func (cm *ConfigurationManager) GetConfigVersions(d *discovery.Discovery, server
 	return versions, nil
 }
 
-// RollbackToVersion 回滚到指定版本
-func (cm *ConfigurationManager) RollbackToVersion(d *discovery.Discovery, serverName, env, versionID string) error {
+// GetConfigVersion retrieves a specific configuration version.
+func (cm *ConfigurationManager) GetConfigVersion(d *discovery.Discovery, serverName, env, versionID string) (*entities.ConfigVersion, error) {
 	// 获取版本信息
 	key := fmt.Sprintf("easyms/versions/%s/%s/%s", env, serverName, versionID)
 	val, err := d.Get(key)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	if val == "" {
+		return nil, fmt.Errorf("version %s not found", versionID)
 	}
 
 	var version entities.ConfigVersion
-	err = yaml.Unmarshal([]byte(val), &version)
+	if err := yaml.Unmarshal([]byte(val), &version); err != nil {
+		return nil, err
+	}
+	return &version, nil
+}
+
+// RollbackToVersion 回滚到指定版本
+func (cm *ConfigurationManager) RollbackToVersion(d *discovery.Discovery, serverName, env, versionID string) error {
+	version, err := cm.GetConfigVersion(d, serverName, env, versionID)
 	if err != nil {
 		return err
 	}
-
 	// 将配置数据写入当前配置键
 	configKey := fmt.Sprintf("easyms/%s/%s.yaml", env, serverName)
 	return d.Put(configKey, version.ConfigData)
@@ -207,10 +211,5 @@ func (cm *ConfigurationManager) SetProvider(provider AppConfigProvider) {
 
 // getCurrentTimestamp 获取当前时间戳
 func getCurrentTimestamp() int64 {
-	return getCurrentTime().Unix()
-}
-
-// getCurrentTime 获取当前时间
-func getCurrentTime() time.Time {
-	return time.Now()
+	return now().Unix()
 }

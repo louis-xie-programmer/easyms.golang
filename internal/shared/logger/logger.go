@@ -52,15 +52,24 @@ func shouldLog(level string) bool {
 func Init(service string, cfg *entities.AppConfig) {
 	// 初始化全局服务名称和日志级别
 	defaultService = service
-	minLogLevel = strings.ToLower(cfg.Log.LogLevel)
+	if cfg != nil && cfg.Log != (entities.LogConfig{}) {
+		minLogLevel = strings.ToLower(cfg.Log.LogLevel)
+	} else {
+		minLogLevel = "info"
+	}
 
 	// 根据配置创建不同的日志实现
-	switch strings.ToLower(cfg.Log.LogType) {
-	case "loki":
-		// 使用Loki日志系统
-		loggerImpl = NewLokiLogger(service, cfg.Loki)
-	default:
-		// 默认使用Zerolog日志系统
+	if cfg != nil && cfg.Log != (entities.LogConfig{}) {
+		switch strings.ToLower(cfg.Log.LogType) {
+		case "loki":
+			// 使用Loki日志系统
+			loggerImpl = NewLokiLogger(service, cfg.Loki)
+		default:
+			// 默认使用Zerolog日志系统
+			loggerImpl = NewZerologLogger(service, minLogLevel)
+		}
+	} else {
+		// 使用默认日志实现
 		loggerImpl = NewZerologLogger(service, minLogLevel)
 	}
 

@@ -1,13 +1,15 @@
+// watcher.go
 package config
 
 import (
 	"easyms/internal/shared/discovery"
 	"easyms/internal/shared/entities"
 	"fmt"
-	"gopkg.in/yaml.v2"
 	"reflect"
 	"sync"
 	"time"
+
+	"gopkg.in/yaml.v2"
 )
 
 // ConfigWatcher 配置监听器
@@ -112,28 +114,32 @@ func (cw *ConfigWatcher) checkConfigChange() {
 
 			fmt.Printf("Detected config change for key: %s\n", key)
 		}
-
-		var cfg entities.AppConfig
-		// 解析配置
-		err = yaml.Unmarshal([]byte(val), &cfg)
-		if err != nil {
-			fmt.Printf("Failed to unmarshal config: %v\n", err)
-			continue
-		}
-
-		// 深度合并配置
-		cw.configMgr.MergeConfigs(newConfig, &cfg)
 	}
 
 	// 如果配置发生了变化
 	if configChanged {
-		// 获取当前服务是否为网关
-		isGateway := cw.serverName == "gateway"
+		// 重新加载所有配置以确保正确的覆盖顺序
+		for _, key := range appKeys {
+			val, err := cw.client.Get(key)
+			if err != nil {
+				fmt.Printf("Failed to get config from Consul: %v\n", err)
+				continue
+			}
+			if val == "" {
+				fmt.Printf("Config key not found: %s\n", key)
+				continue
+			}
 
-		// 验证配置
-		if err := newConfig.Validate(isGateway); err != nil {
-			fmt.Printf("Invalid config detected: %v\n", err)
-			return
+			var cfg entities.AppConfig
+			// 解析配置
+			err = yaml.Unmarshal([]byte(val), &cfg)
+			if err != nil {
+				fmt.Printf("Failed to unmarshal config: %v\n", err)
+				continue
+			}
+
+			// 深度合并配置
+			cw.configMgr.MergeConfigs(newConfig, &cfg)
 		}
 
 		fmt.Println("Configuration reloaded successfully")

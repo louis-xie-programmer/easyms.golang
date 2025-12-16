@@ -1,3 +1,4 @@
+// internal/services/auth/main.go
 package main
 
 import (
@@ -8,6 +9,7 @@ import (
 	"easyms/internal/shared/config"
 	"easyms/internal/shared/db"
 	"easyms/internal/shared/discovery"
+	"easyms/internal/shared/entities"
 	"easyms/internal/shared/logger"
 	"fmt"
 	"time"
@@ -17,7 +19,6 @@ import (
 
 // main 认证服务主函数
 func main() {
-	// 获取环境变量
 	// 认证服务名称和端口
 	serverName := "auth-svc"
 
@@ -28,17 +29,40 @@ func main() {
 		logger.Error(err, "Failed to initialize app config store", serverName, nil)
 	}
 
-	// 创建 Discovery 客户端用于服务注册和配置加载
-	discoveryClient, err := discovery.NewDiscovery(cfgStore.Consul.Host)
-	if err != nil {
-		logger.Error(err, "Failed to create consul discovery client", serverName, nil)
+	// 按需初始化Discovery客户端
+	var discoveryClient *discovery.Discovery
+	// Consul 不仅仅是配置中心，还是服务发现组件,所以单独创建
+	if cfgStore.Consul != (entities.ConsulConfig{}) {
+		discoveryClient, err = discovery.NewDiscovery(cfgStore.Consul.Host)
+		if err != nil {
+			logger.Error(err, "Failed to create consul client", serverName, nil)
+		}
 	}
 
-	// 加载服务配置
-	// 根据配置类型（本地或Consul）加载服务配置
-	err = config.LoadServiceConfig(discoveryClient, cfgStore.Consul.KeyPath, cfgStore.StoreType, serverName, cfgStore.Env)
-	if err != nil {
-		logger.Error(err, "Failed to load service config", serverName, nil)
+	var provider config.AppConfigProvider
+
+	// 加载应用配置
+	if cfgStore.StoreType == "consul" {
+		// 使用Consul配置提供者
+		provider = config.NewConsulConfig(discoveryClient, serverName, cfgStore.Consul.KeyPath, cfgStore.Env)
+		err := provider.LoadAppConfig()
+		if err != nil {
+			logger.Error(err, "Failed to load app config", serverName, nil)
+			panic(err)
+		}
+		// 动态监听配置文件并更新服务
+		watch := config.NewConfigWatcher(discoveryClient, cfgStore.Consul.KeyPath, serverName, cfgStore.Env, provider.OnChange())
+		go watch.Start()
+
+	} else {
+		// 使用本地配置提供者
+		// 从本地配置文件加载配置
+		provider = config.NewLocalConfig(serverName, cfgStore.Env)
+		err := provider.LoadAppConfig()
+		if err != nil {
+			logger.Error(err, "Failed to load local app config", serverName, nil)
+			panic(err)
+		}
 	}
 
 	// 获取应用配置
@@ -53,7 +77,7 @@ func main() {
 	var tokenService service.TokenService
 	var tokenGranter service.TokenGranter
 	var tokenEnhancer storage.TokenEnhancer
-	var tokenStore storage.TokenStore
+	// var tokenStore storage.TokenStore
 	var userDetailsService service.UserDetailsService
 	var clientDetailsService service.ClientDetailsService
 
@@ -84,11 +108,11 @@ func main() {
 		panic(err)
 	}
 
-	// 初始化令牌存储器
-	// 使用JWT令牌存储器
-	tokenStore = storage.NewJwtTokenStore(tokenEnhancer.(*storage.JwtTokenEnhancer), dbase)
-
-	// 初始化令牌服务
+	// 通过依赖注入创建服务
+	if appConfig.Database.Type != "postgres" {
+		panic("unsupported database type: " + appConfig.Database.Type)
+	}
+	tokenStore := storage.NewJwtTokenStore(tokenEnhancer.(*storage.JwtTokenEnhancer), dbase)
 	tokenService = service.NewTokenService(tokenStore, tokenEnhancer)
 
 	// 初始化用户详情服务
@@ -104,18 +128,20 @@ func main() {
 		"refresh_token":      service.NewRefreshGranter("refresh_token", tokenService),
 	})
 
-	// 注册服务到Consul
-	// 将当前服务注册到Consul服务注册中心
-	// 添加短暂延迟以避免服务注册冲突
-	time.Sleep(time.Millisecond * 200)
-	err = discoveryClient.Register(serverName, appConfig.Server.Host, appConfig.Server.Port, nil)
-	if err != nil {
-		panic(err)
-	}
+	if discoveryClient != nil {
+		// 注册服务到Consul
+		// 将当前服务注册到Consul服务注册中心
+		// 添加短暂延迟以避免服务注册冲突
+		time.Sleep(time.Millisecond * 200)
+		err = discoveryClient.Register(serverName, appConfig.Server.Host, appConfig.Server.Port, nil)
+		if err != nil {
+			panic(err)
+		}
 
-	// 延迟注销服务
-	// 确保服务在退出时从Consul中注销
-	defer discoveryClient.DeRegister(serverName)
+		// 延迟注销服务
+		// 确保服务在退出时从Consul中注销
+		defer discoveryClient.DeRegister(serverName)
+	}
 
 	// 启动 HTTP 服务
 	// 使用Gin框架启动HTTP服务
@@ -127,9 +153,11 @@ func main() {
 		c.String(200, "ok")
 	})
 
-	// 初始化配置管理接口
-	configHandler := config.NewConfigHandler(discoveryClient, serverName, cfgStore.Env)
-	configHandler.RegisterConfigRoutes(g)
+	// 配置管理端点 (仅在Consul配置存储时启用)
+	if cfgStore.StoreType == "consul" {
+		configHandler := config.NewConfigHandler(discoveryClient, provider, serverName, cfgStore.Env)
+		configHandler.RegisterConfigRoutes(g)
+	}
 
 	// 第1步. 通过ClientId,ClientSecret 来获取客户端默认的授权令牌，注意默认用户直接存储在数据库中，通过客户端Id和ClientSecret进行认证，同时从数据库中查询默认用户信息，最终生成访问令牌
 	g.POST("/oauth2/token", handles.MakeTokenEndpoint(tokenGranter, clientDetailsService))
