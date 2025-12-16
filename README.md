@@ -348,6 +348,9 @@ migrations/
 - **Loki**：日志聚合系统
 - **Grafana**：可视化监控面板
 - **Promtail**：日志收集代理
+- **API Gateway**：API网关
+- **Auth Service**：认证服务
+- **User Service**：用户服务
 
 ### 2. 网络配置
 
@@ -373,6 +376,8 @@ docker-compose up -d
 - **Consul UI**：http://localhost:8500
 - **Grafana**：http://localhost:3000 (默认账号密码: admin/admin)
 - **API Gateway**：http://localhost:10000
+- **Auth Service**：http://localhost:10001
+- **User Service**：http://localhost:10002
 
 ## 十一、Makefile 使用指南
 
@@ -396,6 +401,12 @@ make run
 
 # 停止所有服务
 make stop
+
+# 启动网关服务
+make run-gateway
+
+# 启动认证服务
+make run-auth
 ```
 
 ### 3. 代码质量相关命令
@@ -430,42 +441,8 @@ make help
 
 - Go 1.24+
 - Docker & Docker Compose
-- Consul
-- PostgreSQL
 
-### 2. 目录结构
-
-```
-.
-├── configs/              # 配置文件
-│   ├── app.yaml          # 应用基本配置
-│   ├── share/            # 共享配置
-│   │   ├── dev.yaml      # 开发环境共享配置
-│   │   └── prod.yaml     # 生产环境共享配置
-│   ├── auth-svc/         # 认证服务配置
-│   │   ├── dev.yaml      # 开发环境配置
-│   │   └── prod.yaml     # 生产环境配置
-│   └── user-svc/         # 用户服务配置
-│       ├── dev.yaml      # 开发环境配置
-│       └── prod.yaml     # 生产环境配置
-├── deploy/               # 部署相关文件
-│   └── docker/           # Docker部署文件
-├── internal/             # 内部包（不允许外部导入）
-│   ├── platform/         # 平台级服务
-│   │   ├── gateway/      # API网关
-│   │   └── migrate/      # 数据库迁移工具
-│   └── services/         # 业务服务
-│       ├── auth/         # 认证服务
-│       └── user/         # 用户服务
-├── migrations/           # 数据库迁移脚本
-├── pkg/                  # 公共包（可被外部导入）
-│   └── models/           # 共享数据模型
-└── ...                   # 其他文件
-```
-
-
-
-### 3. 运行服务
+### 2. 启动服务
 
 ```bash
 # 使用 Docker Compose 启动所有服务
@@ -480,14 +457,14 @@ docker-compose up -d
 
 | 组件 | 版本 | 说明 |
 |------|------|------|
-| Go | 1.24+ | 核心开发语言 |
-| Gin | v1.9+ | Web 框架 |
-| Consul | latest | 服务发现与配置中心 |
+| Go | 1.25.2 | 核心开发语言 |
+| Gin | v1.10.1 | Web 框架 |
+| Consul | 1.32.1 | 服务发现与配置中心 |
 | PostgreSQL | 18.1 | 主数据库 |
 | Redis | 7-alpine | 缓存系统 |
 | Loki | 2.9.4 | 日志收集系统 |
-| go-circuitbreaker | latest | 熔断器实现 |
-| golang/oauth2 | latest | OAuth2 支持 |
+| go-circuitbreaker | 0.0.2 | 熔断器实现 |
+| golang-jwt | v5.3.0 | JWT支持 |
 
 ## 十四、API 文档
 
@@ -506,7 +483,70 @@ docker-compose up -d
 - `GET /config/current` - 获取当前配置
 - `PUT /config/current` - 更新当前配置
 
-## 十五、部署指南
+## 十五、核心特性详解
+
+### 1. 服务注册与发现
+
+基于 Consul 实现服务注册与发现，支持健康检查和服务元数据。
+
+### 2. 配置管理与热更新
+
+系统支持两种配置管理模式：本地文件和 Consul 配置中心，并提供配置热更新机制。
+
+### 3. API 网关
+
+内置反向代理和负载均衡功能，支持服务路由、熔断和限流。
+
+### 4. 熔断器
+
+集成 go-circuitbreaker 实现服务熔断机制，防止故障扩散。
+
+### 5. 限流器
+
+支持 IP 和 User-Agent 维度的动态限流，规则可通过 Consul 或 YAML 配置，热更新秒级生效。
+
+### 6. 日志系统
+
+结构化日志记录，支持 Loki 日志收集，提供统一的日志查询和分析能力。
+
+### 7. 认证授权
+
+内置 OAuth2 认证服务，支持密码模式和刷新令牌模式。
+
+### 8. 数据库访问
+
+使用 GORM ORM 框架，支持 PostgreSQL 数据库，提供连接池管理和迁移工具。
+
+### 9. 缓存系统
+
+集成 Redis 缓存，提供缓存穿透、击穿、雪崩防护机制。
+
+## 十六、架构设计
+
+### 1. 分层架构
+
+项目采用清晰的分层架构设计：
+
+- **API层**：处理HTTP请求和响应
+- **Service层**：实现业务逻辑
+- **Repository层**：处理数据访问
+- **Model层**：定义数据模型
+
+### 2. 微服务拆分
+
+- **Gateway服务**：API网关，负责请求路由、熔断和限流
+- **Auth服务**：认证授权服务，处理用户认证和令牌管理
+- **User服务**：用户管理服务，处理用户相关业务逻辑
+
+### 3. 共享组件
+
+- **Config**：统一配置管理
+- **DB**：数据库访问封装
+- **Discovery**：服务发现封装
+- **Logger**：日志系统封装
+- **Middleware**：通用中间件
+
+## 十七、部署指南
 
 使用 Docker Compose 快速部署整套系统：
 
@@ -521,10 +561,6 @@ cd deploy/docker
 docker-compose up -d
 ```
 
-## 十六、贡献指南
+## 十八、贡献指南
 
 欢迎提交 Issue 和 Pull Request 来改进项目。
-
-## 十七、许可证
-
-本项目采用 MIT 许可证，详见 [LICENSE](LICENSE) 文件。
