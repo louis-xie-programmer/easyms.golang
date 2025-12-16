@@ -1,8 +1,7 @@
 package middleware
 
 import (
-	"easyms/internal/shared/config"
-	"easyms/internal/shared/entities"
+	"easyms/internal/platform/gateway/internal/domain/model"
 	"fmt"
 	"net"
 	"regexp"
@@ -13,8 +12,8 @@ import (
 )
 
 type LimiterManager struct {
-	ipRules        []entities.IPLimitRule
-	uaRules        []entities.UALimitRule
+	ipRules        []model.IPLimitRule
+	uaRules        []model.UALimitRule
 	ipLimiters     map[string]*rate.Limiter // CIDR -> limiter
 	uaLimiters     map[string]*rate.Limiter // Pattern -> limiter
 	defaultLimiter *rate.Limiter
@@ -22,8 +21,8 @@ type LimiterManager struct {
 }
 
 type ConsulRateLimitConfig struct {
-	IPLimits []entities.IPLimitRule `yaml:"ip_limits" json:"ip_limits"`
-	UALimits []entities.UALimitRule `yaml:"ua_limits" json:"ua_limits"`
+	IPLimits []model.IPLimitRule `yaml:"ip_limits" json:"ip_limits"`
+	UALimits []model.UALimitRule `yaml:"ua_limits" json:"ua_limits"`
 }
 
 // 初始化限流器管理器
@@ -56,43 +55,6 @@ func NewLimiterManager(cfg *ConsulRateLimitConfig, defaultRate float64, defaultB
 		lm.uaLimiters[rule.Pattern] = rate.NewLimiter(rate.Limit(rule.Rate), rule.Burst)
 	}
 	return lm, nil
-}
-
-// 基于 config.GetAppConfig() 实时维护限流规则
-func (lm *LimiterManager) SyncFromAppConfig() {
-	cfg := config.GetAppConfig()
-	if cfg == nil || cfg.RateLimit == nil {
-		return
-	}
-	lm.mu.Lock()
-	defer lm.mu.Unlock()
-	lm.ipRules = nil
-	lm.uaRules = nil
-	lm.ipLimiters = make(map[string]*rate.Limiter)
-	lm.uaLimiters = make(map[string]*rate.Limiter)
-	for _, rule := range cfg.RateLimit.IPLimits {
-		_, ipnet, err := net.ParseCIDR(rule.CIDR)
-		if err != nil {
-			continue
-		}
-		r := rule
-		r.Net = ipnet
-		lm.ipRules = append(lm.ipRules, r)
-		lm.ipLimiters[rule.CIDR] = rate.NewLimiter(rate.Limit(rule.Rate), rule.Burst)
-	}
-	for _, rule := range cfg.RateLimit.UALimits {
-		re, err := regexp.Compile(rule.Pattern)
-		if err != nil {
-			continue
-		}
-		r := rule
-		r.Regexp = re
-		lm.uaRules = append(lm.uaRules, r)
-		lm.uaLimiters[rule.Pattern] = rate.NewLimiter(rate.Limit(rule.Rate), rule.Burst)
-	}
-	if cfg.RateLimit.DefaultRate > 0 && cfg.RateLimit.DefaultBurst > 0 {
-		lm.defaultLimiter = rate.NewLimiter(rate.Limit(cfg.RateLimit.DefaultRate), cfg.RateLimit.DefaultBurst)
-	}
 }
 
 // Gin限流中间件

@@ -8,13 +8,12 @@
 package main
 
 import (
+	"easyms/internal/platform/gateway"
 	"easyms/internal/shared/config"
 	"easyms/internal/shared/discovery"
-	"easyms/internal/platform/gateway"
 	"easyms/internal/shared/logger"
 	"fmt"
 	"net/http"
-	"time"
 )
 
 // main API网关服务入口函数
@@ -49,12 +48,31 @@ func main() {
 		logger.Error(err, "Failed to create consul discovery client", serverName, nil)
 	}
 
+	var provider config.AppConfigProvider
+
 	// 加载服务配置
 	// 根据配置类型（本地或Consul）加载服务配置
-	err = config.LoadServiceConfig(discoveryClient, cfgStore.Consul.KeyPath, cfgStore.StoreType, serverName, cfgStore.Env)
-	if err != nil {
-		fmt.Printf("Failed to load service config %s: %v\n", cfgStore, err)
-		logger.Error(err, "Failed to load service config", serverName, nil)
+	// 加载应用配置
+	if cfgStore.StoreType == "consul" {
+		// 使用Consul配置提供者
+		provider = config.NewConsulConfig(discoveryClient, serverName, cfgStore.Consul.KeyPath, cfgStore.Env)
+		err := provider.LoadAppConfig()
+		if err != nil {
+			logger.Error(err, "Failed to load app config", serverName, nil)
+			panic(err)
+		}
+		// 动态监听配置文件并更新服务
+		watch := config.NewConfigWatcher(discoveryClient, cfgStore.Consul.KeyPath, serverName, cfgStore.Env, provider.OnChange())
+		go watch.Start()
+	} else {
+		// 使用本地配置提供者
+		// 从本地配置文件加载配置
+		provider = config.NewLocalConfig(serverName, cfgStore.Env)
+		err := provider.LoadAppConfig()
+		if err != nil {
+			logger.Error(err, "Failed to load local app config", serverName, nil)
+			panic(err)
+		}
 	}
 
 	// 获取应用配置
@@ -67,9 +85,9 @@ func main() {
 	// 创建API网关实例
 	// 初始化网关，传入服务发现客户端
 	gw := gateway.NewGateway(sd)
-	
+
 	// 更新网关配置
-	gw.UpdateConfig(appConfig)
+	gw.LoadConfig("./internal/platform/gateway/internal/configs/gateway.yaml")
 
 	// 启动HTTP服务
 	// 启动网关HTTP服务，监听指定端口
@@ -77,18 +95,4 @@ func main() {
 	if err := http.ListenAndServe(fmt.Sprintf(":%d", port), gw); err != nil {
 		fmt.Printf("Failed to start %s: %v\n", serverName, err)
 	}
-	
-	// 定期重新加载配置
-	go func() {
-		ticker := time.NewTicker(10 * time.Second)
-		defer ticker.Stop()
-		
-		for range ticker.C {
-			appConfig := config.GetAppConfig()
-			if appConfig != nil {
-				gw.UpdateConfig(appConfig)
-				fmt.Println("Gateway configuration reloaded")
-			}
-		}
-	}()
 }

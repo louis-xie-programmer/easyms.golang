@@ -44,7 +44,11 @@ fmt:
 
 # 迁移数据库
 migrate:
-	go run ./internal/platform/migrate -dbURL $(DB_URL)
+	go run ./internal/platform/migrate -dbURL $(DB_URL) auto
+
+push-config:
+	@echo "推送配置..."
+	go run ./internal/platform/push-config
 
 # 检查代码问题
 vet:

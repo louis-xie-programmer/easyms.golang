@@ -41,7 +41,6 @@ func NewConsulConfig(client *discovery.Discovery, serviceName, keyPath, env stri
 
 func (cc *ConsulConfig) OnChange() func(newConfig *entities.AppConfig) {
 	// 更新配置
-	fmt.Println("Updating config...")
 	return func(newConfig *entities.AppConfig) {
 		cc.configMgr.UpdateConfig(newConfig)
 	}

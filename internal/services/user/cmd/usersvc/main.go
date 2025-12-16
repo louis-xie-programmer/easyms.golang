@@ -1,10 +1,10 @@
 package main
 
 import (
-	"easyms/internal/shared/middleware"
 	"easyms/internal/shared/config"
 	"easyms/internal/shared/discovery"
 	"easyms/internal/shared/logger"
+	"easyms/internal/shared/middleware"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -332,9 +332,28 @@ func main() {
 
 	// 加载服务配置
 	// 根据配置类型（本地或Consul）加载服务配置
-	err = config.LoadServiceConfig(discoveryClient, cfgStore.Consul.KeyPath, cfgStore.StoreType, serverName, cfgStore.Env)
-	if err != nil {
-		logger.Error(err, "Failed to load service config", serverName, nil)
+	var provider config.AppConfigProvider
+	// 加载应用配置
+	if cfgStore.StoreType == "consul" {
+		// 使用Consul配置提供者
+		provider = config.NewConsulConfig(discoveryClient, serverName, cfgStore.Consul.KeyPath, cfgStore.Env)
+		err := provider.LoadAppConfig()
+		if err != nil {
+			logger.Error(err, "Failed to load app config", serverName, nil)
+			panic(err)
+		}
+		// 动态监听配置文件并更新服务
+		watch := config.NewConfigWatcher(discoveryClient, cfgStore.Consul.KeyPath, serverName, cfgStore.Env, provider.OnChange())
+		go watch.Start()
+	} else {
+		// 使用本地配置提供者
+		// 从本地配置文件加载配置
+		provider = config.NewLocalConfig(serverName, cfgStore.Env)
+		err := provider.LoadAppConfig()
+		if err != nil {
+			logger.Error(err, "Failed to load local app config", serverName, nil)
+			panic(err)
+		}
 	}
 
 	// 获取应用配置

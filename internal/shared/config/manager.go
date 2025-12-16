@@ -6,7 +6,6 @@ import (
 	"easyms/internal/shared/discovery"
 	"easyms/internal/shared/entities"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -49,8 +48,6 @@ func (cm *ConfigurationManager) UpdateConfig(newConfig *entities.AppConfig) {
 	cm.configLock.Lock()
 	defer cm.configLock.Unlock()
 	cm.appConfig = newConfig
-
-	fmt.Println("Configuration updated!")
 }
 
 // MergeConfigs 合并配置，将source配置合并到target配置中
@@ -81,11 +78,6 @@ func (cm *ConfigurationManager) SaveConfigVersion(d *discovery.Discovery, server
 	currentConfig := cm.GetConfig()
 	if currentConfig == nil {
 		return "", fmt.Errorf("current config is nil")
-	}
-
-	// 验证配置
-	if err := currentConfig.Validate(isGateway); err != nil {
-		return "", fmt.Errorf("config validation failed: %w", err)
 	}
 
 	// 序列化配置
@@ -151,11 +143,6 @@ func (cm *ConfigurationManager) GetConfigVersions(d *discovery.Discovery, server
 		err = yaml.Unmarshal([]byte(version.ConfigData), &config)
 		if err != nil {
 			return nil, err
-		}
-
-		if err := config.Validate(isGateway); err != nil {
-			log.Printf("warning: config validation failed for version %s, skipping: %v", version.VersionID, err)
-			continue // Skip invalid versions but continue processing others
 		}
 
 		versions = append(versions, &version)

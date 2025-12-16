@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/spf13/viper"
 	"easyms/internal/shared/discovery"
+	"github.com/spf13/viper"
 	"gopkg.in/yaml.v2"
 )
 
@@ -21,10 +21,10 @@ func main() {
 	// 1. 加载基础配置
 	currentDir, _ := os.Getwd()
 	fmt.Printf("当前工作目录: %s\n", currentDir)
-	
+
 	configPath := filepath.Join(currentDir, "configs")
 	fmt.Printf("尝试读取配置路径: %s\n", configPath)
-	
+
 	viper.AddConfigPath(configPath)
 	viper.SetConfigName("app")
 	viper.SetConfigType("yaml")
@@ -34,7 +34,8 @@ func main() {
 
 	// 2. 获取Consul配置
 	consulHost := viper.GetString("consul.host")
-	keyPath := viper.GetString("consul.key_path")
+	keyPaths := viper.GetString("consul.key_path")
+	keyPath := strings.Split(keyPaths, ";")[1]
 
 	// 3. 遍历服务配置目录
 	servicesDir := filepath.Join(currentDir, "configs")
@@ -44,10 +45,6 @@ func main() {
 	}
 
 	for _, service := range services {
-		if !service.IsDir() || service.Name() == "share" {
-			continue
-		}
-
 		servicePath := filepath.Join(servicesDir, service.Name())
 		envFiles, _ := os.ReadDir(servicePath)
 
@@ -71,17 +68,22 @@ func main() {
 			}
 
 			// 处理配置继承
-			if extends := v.GetString("extends"); extends != "" {
-				basePath := filepath.Join(servicePath, extends)
-				baseViper := viper.New()
-				baseViper.SetConfigFile(basePath)
-				if err := baseViper.ReadInConfig(); err == nil {
-					v.MergeConfigMap(baseViper.AllSettings())
-				}
-			}
+			//if extends := v.GetString("extends"); extends != "" {
+			//	basePath := filepath.Join(servicePath, extends)
+			//	baseViper := viper.New()
+			//	baseViper.SetConfigFile(basePath)
+			//	if err := baseViper.ReadInConfig(); err == nil {
+			//		err := v.MergeConfigMap(baseViper.AllSettings())
+			//		if err != nil {
+			//			fmt.Printf("❌ 合并配置失败 [%s]: %v\n", basePath, err)
+			//			continue
+			//		}
+			//	}
+			//}
 
 			// 6. 推送到Consul
-			configKey := fmt.Sprintf(keyPath, service.Name(), env)
+			configKey := strings.ReplaceAll(keyPath, "${server_name}", service.Name())
+			configKey = strings.ReplaceAll(configKey, "${env}", env)
 			configData, err := yaml.Marshal(v.AllSettings())
 			if err != nil {
 				fmt.Printf("❌ 序列化配置失败 [%s]: %v\n", configKey, err)

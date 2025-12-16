@@ -1,10 +1,11 @@
-// loki.go 实现Loki日志后端，包含：
+// loki_logger.go 实现Loki日志后端，包含：
 // - 结构化日志JSON序列化
 // - 批量推送至Loki服务
 // - 基础认证支持
 // - HTTP客户端配置
 // - 响应状态码验证
 // - 异步日志传输
+// - 错误重试和降级处理
 package logger
 
 import (
@@ -12,8 +13,10 @@ import (
 	"easyms/internal/shared/entities"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
+	"time"
 )
 
 // LokiLogger 实现Loki日志后端
@@ -22,6 +25,7 @@ type LokiLogger struct {
 	service  string
 	username string
 	password string
+	client   *http.Client
 }
 
 // Log 将日志条目发送到Loki日志系统
@@ -39,7 +43,8 @@ type LokiLogger struct {
 // 2. 转换日志条目为Loki所需的格式
 // 3. 创建并发送包含认证信息的HTTP请求
 // 4. 处理响应结果及可能的错误
-func (l *LokiLogger) Log(logs []entities.LogEntry) error {
+// 5. 添加重试和降级处理机制
+func (l *LokiLogger) Log(logs []LogEntry) error {
 	// 初始化Loki日志流结构
 	// Loki要求特定的流格式，包含标签和值
 	stream := struct {
@@ -98,24 +103,37 @@ func (l *LokiLogger) Log(logs []entities.LogEntry) error {
 	// 设置请求内容类型
 	req.Header.Set("Content-Type", "application/json")
 
-	// 创建HTTP客户端并发送请求
-	client := &http.Client{}
+	// 添加重试机制
+	maxRetries := 3
+	for i := 0; i < maxRetries; i++ {
+		// 执行请求并获取响应
+		resp, err := l.client.Do(req)
+		if err == nil && resp.StatusCode == http.StatusNoContent {
+			// 确保响应体正确关闭
+			resp.Body.Close()
+			return nil
+		}
 
-	// 执行请求并获取响应
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
+		if resp != nil {
+			resp.Body.Close()
+		}
+
+		// 指数退避
+		if i < maxRetries-1 { // 最后一次不需要sleep
+			time.Sleep(time.Duration(math.Pow(2, float64(i))) * time.Second)
+		}
 	}
-	// 确保响应体正确关闭
-	defer resp.Body.Close()
 
-	// 验证响应状态码是否为预期的成功状态
-	// Loki成功响应状态码为204 No Content
-	if resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
+	// 如果重试失败，降级处理：写入本地文件
+	fmt.Printf("WARNING: Failed to send logs to Loki after %d retries, falling back to local logging\n", maxRetries)
+	return l.fallbackToLocal(logs)
+}
 
-	return nil
+// fallbackToLocal 当Loki不可用时，将日志写入本地作为降级处理
+func (l *LokiLogger) fallbackToLocal(logs []LogEntry) error {
+	// 创建一个临时的本地logger用于降级处理
+	localLogger := NewZerologLogger(l.service, "warn")
+	return localLogger.Log(logs)
 }
 
 // NewLokiLogger 创建并返回一个新的LokiLogger实例
@@ -136,5 +154,8 @@ func NewLokiLogger(service string, cfg entities.LokiConfig) *LokiLogger {
 		service:  service,
 		username: cfg.Username,
 		password: cfg.Password,
+		client: &http.Client{
+			Timeout: 5 * time.Second,
+		},
 	}
 }

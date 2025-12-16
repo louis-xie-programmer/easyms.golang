@@ -14,14 +14,14 @@ import (
 // 定义了数据库操作的标准方法
 // 提供统一的数据库访问接口，屏蔽不同数据库之间的差异
 type Database interface {
-	AutoMigrate(models ...interface{}) error     // 自动迁移数据库表结构
-	Insert(value interface{}) error              // 插入数据
-	Query(dest interface{}, query string, args ...interface{}) error  // 查询数据
+	AutoMigrate(models ...interface{}) error                         // 自动迁移数据库表结构
+	Insert(value interface{}) error                                  // 插入数据
+	Query(dest interface{}, query string, args ...interface{}) error // 查询数据
 	Count(query string, args ...interface{}) (int64, error)          // 统计记录数
 	Where(query string, args ...interface{}) *gorm.DB                // 添加WHERE条件
 	Order(query string) *gorm.DB                                     // 添加排序条件
 	Limit(limit int) *gorm.DB                                        // 添加LIMIT限制
-	Update(model interface{}, updates map[string]interface{}) error   // 更新数据
+	Update(model interface{}, updates map[string]interface{}) error  // 更新数据
 	Delete(model interface{}, conds ...interface{}) error            // 删除数据
 	GetDB() *gorm.DB                                                 // 获取底层GORM实例
 	GetType() string                                                 // 获取数据库类型
@@ -32,7 +32,7 @@ type DatabaseConfig struct {
 	Type     string `yaml:"type"`
 	Host     string `yaml:"host"`
 	Port     int    `yaml:"port"`
-	UserName string `yaml:"user"`
+	UserName string `yaml:"username"`
 	Password string `yaml:"password"`
 	Database string `yaml:"database"`
 	// 连接池配置
@@ -44,8 +44,8 @@ type DatabaseConfig struct {
 
 // EasyDatabase 数据库实例结构体
 type EasyDatabase struct {
-	DB     *gorm.DB  // GORM数据库实例
-	DBType string    // 数据库类型
+	DB     *gorm.DB // GORM数据库实例
+	DBType string   // 数据库类型
 }
 
 // AutoMigrate 自动迁移数据库表结构
@@ -57,7 +57,7 @@ func (ed *EasyDatabase) AutoMigrate(models ...interface{}) error {
 func (ed *EasyDatabase) Insert(value interface{}) error {
 	// 使用 Session 创建一个新会话
 	session := ed.DB.Session(&gorm.Session{})
-	
+
 	// 执行插入操作
 	return session.Create(value).Error
 }
@@ -116,6 +116,7 @@ func (ed *EasyDatabase) GetType() string {
 // 参数:
 //   - dbType: 数据库类型（mysql/postgres/sqlserver）
 //   - connStr: 数据库连接字符串
+//
 // 返回值:
 //   - Database: 数据库实例
 //   - error: 操作成功返回nil，失败返回具体错误
@@ -130,6 +131,7 @@ func NewEasyDatabase(dbType string, connStr string) (Database, error) {
 //   - dbType: 数据库类型（mysql/postgres/sqlserver）
 //   - connStr: 数据库连接字符串
 //   - cfg: 连接池配置
+//
 // 返回值:
 //   - Database: 数据库实例
 //   - error: 操作成功返回nil，失败返回具体错误

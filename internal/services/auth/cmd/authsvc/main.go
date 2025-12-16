@@ -9,11 +9,8 @@ import (
 	"easyms/internal/shared/config"
 	"easyms/internal/shared/db"
 	"easyms/internal/shared/discovery"
-	"easyms/internal/shared/entities"
 	"easyms/internal/shared/logger"
 	"fmt"
-	"time"
-
 	"github.com/gin-gonic/gin"
 )
 
@@ -25,18 +22,16 @@ func main() {
 	// 初始化应用配置存储
 	// 读取 configs/app.yaml 配置文件
 	cfgStore, err := config.InitAppConfigStore()
-	if err != nil {
-		logger.Error(err, "Failed to initialize app config store", serverName, nil)
+	if err != nil || cfgStore == nil {
+		fmt.Printf("Failed to initialize app config store: %v\n", err)
+		panic(err)
 	}
-
 	// 按需初始化Discovery客户端
-	var discoveryClient *discovery.Discovery
-	// Consul 不仅仅是配置中心，还是服务发现组件,所以单独创建
-	if cfgStore.Consul != (entities.ConsulConfig{}) {
-		discoveryClient, err = discovery.NewDiscovery(cfgStore.Consul.Host)
-		if err != nil {
-			logger.Error(err, "Failed to create consul client", serverName, nil)
-		}
+	// 添加检查确保cfgStore不为空再访问其属性
+	discoveryClient, err := discovery.NewDiscovery(cfgStore.Consul.Host)
+	if err != nil {
+		logger.Error(err, "Failed to create consul client", serverName, nil)
+		panic(err)
 	}
 
 	var provider config.AppConfigProvider
@@ -53,7 +48,6 @@ func main() {
 		// 动态监听配置文件并更新服务
 		watch := config.NewConfigWatcher(discoveryClient, cfgStore.Consul.KeyPath, serverName, cfgStore.Env, provider.OnChange())
 		go watch.Start()
-
 	} else {
 		// 使用本地配置提供者
 		// 从本地配置文件加载配置
@@ -72,6 +66,20 @@ func main() {
 	// 根据配置初始化日志系统（本地或Loki）
 	logger.Init(serverName, appConfig)
 
+	if discoveryClient != nil {
+		err = discoveryClient.Register(serverName, appConfig.Server.Host, appConfig.Server.Port, nil)
+		if err != nil {
+			panic(err)
+		}
+
+		// 延迟注销服务
+		// 确保服务在退出时从Consul中注销
+		defer discoveryClient.DeRegister(serverName)
+	}
+
+	// 检查appConfig是否为空
+	appConfig = config.GetAppConfig()
+
 	// 初始化认证服务组件
 	// 初始化各种认证服务相关的组件
 	var tokenService service.TokenService
@@ -87,21 +95,13 @@ func main() {
 	// 初始化数据库连接
 	// 根据配置连接到数据库
 	// 添加重试机制以避免连接冲突
-	var dbase db.Database
-	for i := 0; i < 3; i++ {
-		dbase, err = db.NewEasyDatabaseWithPool(appConfig.Database.Type,
-			fmt.Sprintf("%s://%s:%s@%s:%d/%s", appConfig.Database.Type,
-				appConfig.Database.UserName,
-				appConfig.Database.Password,
-				appConfig.Database.Host,
-				appConfig.Database.Port,
-				appConfig.Database.Database),
-			appConfig.Database)
-		if err == nil {
-			break
-		}
-		time.Sleep(time.Second * time.Duration(i+1))
-	}
+	dbase, err := db.NewEasyDatabaseWithPool(appConfig.Database.Type, fmt.Sprintf("%s://%s:%s@%s:%d/%s",
+		appConfig.Database.Type,
+		appConfig.Database.UserName,
+		appConfig.Database.Password,
+		appConfig.Database.Host,
+		appConfig.Database.Port,
+		appConfig.Database.Database), appConfig.Database)
 
 	if err != nil {
 		logger.Error(err, "Failed to connect to database", serverName, nil)
@@ -109,9 +109,6 @@ func main() {
 	}
 
 	// 通过依赖注入创建服务
-	if appConfig.Database.Type != "postgres" {
-		panic("unsupported database type: " + appConfig.Database.Type)
-	}
 	tokenStore := storage.NewJwtTokenStore(tokenEnhancer.(*storage.JwtTokenEnhancer), dbase)
 	tokenService = service.NewTokenService(tokenStore, tokenEnhancer)
 
@@ -127,21 +124,6 @@ func main() {
 		"password":           service.NewUsernamePasswordTokenGranter("password", userDetailsService, tokenService),
 		"refresh_token":      service.NewRefreshGranter("refresh_token", tokenService),
 	})
-
-	if discoveryClient != nil {
-		// 注册服务到Consul
-		// 将当前服务注册到Consul服务注册中心
-		// 添加短暂延迟以避免服务注册冲突
-		time.Sleep(time.Millisecond * 200)
-		err = discoveryClient.Register(serverName, appConfig.Server.Host, appConfig.Server.Port, nil)
-		if err != nil {
-			panic(err)
-		}
-
-		// 延迟注销服务
-		// 确保服务在退出时从Consul中注销
-		defer discoveryClient.DeRegister(serverName)
-	}
 
 	// 启动 HTTP 服务
 	// 使用Gin框架启动HTTP服务

@@ -9,12 +9,15 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"easyms/internal/platform/gateway/internal/domain/model"
+	"gopkg.in/yaml.v2"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -24,7 +27,6 @@ import (
 	"golang.org/x/time/rate"
 
 	"easyms/internal/shared/discovery"
-	"easyms/internal/shared/entities"
 )
 
 // ReverseProxyPool 反向代理池，用于缓存和复用ReverseProxy实例
@@ -79,13 +81,13 @@ type Gateway struct {
 	proxyPool       *ReverseProxyPool                         // 反向代理池
 	httpClient      *http.Client                              // 专用HTTP客户端，带有连接池和超时设置
 	useWeighted     bool                                      // 是否使用权重负载均衡
-	routeRules      []*entities.RouteRule                     // 路由规则
+	routeRules      []*model.RouteRule                        // 路由规则
 	routeMutex      sync.RWMutex                              // 路由规则读写锁
 	circuitBreakers map[string]*circuitbreaker.CircuitBreaker // 熔断器映射
 	cbMutex         sync.RWMutex                              // 熔断器读写锁
 	rateLimiters    map[string]*rate.Limiter                  // 限流器映射
 	rlMutex         sync.RWMutex                              // 限流器读写锁
-	config          *entities.AppConfig                       // 当前配置
+	config          *model.GatewayConfig                      // 当前配置
 	configMutex     sync.RWMutex                              // 配置读写锁
 }
 
@@ -123,7 +125,7 @@ func NewGateway(sd *discovery.ServiceDiscovery) *Gateway {
 		},
 		httpClient:      httpClient,
 		useWeighted:     false,
-		routeRules:      make([]*entities.RouteRule, 0),
+		routeRules:      make([]*model.RouteRule, 0),
 		circuitBreakers: make(map[string]*circuitbreaker.CircuitBreaker),
 		rateLimiters:    make(map[string]*rate.Limiter),
 	}
@@ -135,7 +137,7 @@ func (g *Gateway) UseWeightedLoadBalancer(use bool) {
 }
 
 // matchRoute 匹配路由规则
-func (g *Gateway) matchRoute(path string) *entities.RouteRule {
+func (g *Gateway) matchRoute(path string) *model.RouteRule {
 	g.routeMutex.RLock()
 	defer g.routeMutex.RUnlock()
 
@@ -149,7 +151,7 @@ func (g *Gateway) matchRoute(path string) *entities.RouteRule {
 }
 
 // applyRouteRule 应用路由规则
-func (g *Gateway) applyRouteRule(req *http.Request, rule *entities.RouteRule) (string, string) {
+func (g *Gateway) applyRouteRule(req *http.Request, rule *model.RouteRule) (string, string) {
 	service := rule.ServiceName
 	path := req.URL.Path
 
@@ -173,7 +175,7 @@ func (g *Gateway) applyRouteRule(req *http.Request, rule *entities.RouteRule) (s
 }
 
 // modifyRequest 修改请求
-func (g *Gateway) modifyRequest(req *http.Request, rule *entities.RouteRule) {
+func (g *Gateway) modifyRequest(req *http.Request, rule *model.RouteRule) {
 	// 添加请求头
 	for key, value := range rule.AddHeaders {
 		req.Header.Set(key, value)
@@ -197,7 +199,7 @@ func (g *Gateway) GetCircuitBreaker(serviceName string) *circuitbreaker.CircuitB
 
 	// 获取配置
 	g.configMutex.RLock()
-	var config *entities.CircuitBreakerServiceConfig
+	var config *model.CircuitBreakerServiceConfig
 	if g.config != nil && g.config.CircuitBreaker != nil {
 		if serviceConfig, ok := g.config.CircuitBreaker.Services[serviceName]; ok {
 			config = serviceConfig
@@ -304,16 +306,30 @@ func (g *Gateway) checkRateLimit(req *http.Request) bool {
 	return true
 }
 
+func (g *Gateway) LoadConfig(path string) {
+	cfg, err := os.ReadFile(path)
+	if err != nil {
+		log.Fatalf("[GW] 读取配置文件失败: %v\n", err)
+	}
+	var config *model.GatewayConfig
+	if err := yaml.Unmarshal(cfg, &config); err != nil {
+		log.Fatalf("[GW] 解析配置文件失败: %v\n", err)
+	}
+	g.configMutex.Lock()
+	g.config = config
+	g.configMutex.Unlock()
+}
+
 // UpdateConfig 更新配置
-func (g *Gateway) UpdateConfig(config *entities.AppConfig) {
+func (g *Gateway) UpdateConfig(config *model.GatewayConfig) {
 	g.configMutex.Lock()
 	g.config = config
 	g.configMutex.Unlock()
 
 	// 更新路由规则
-	if config.Gateway != nil {
+	if config != nil {
 		g.routeMutex.Lock()
-		g.routeRules = config.Gateway.RouteRules
+		g.routeRules = config.RouteRules
 		g.routeMutex.Unlock()
 	}
 }

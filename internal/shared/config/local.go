@@ -73,25 +73,69 @@ func (lc *LocalConfig) LoadAppConfig() error {
 		return err
 	}
 
-	currentAppConfig := lc.configMgr.GetConfig()
-	if currentAppConfig == nil {
-		currentAppConfig = &entities.AppConfig{}
-	}
-
 	// 深度合并配置
-	lc.configMgr.MergeConfigs(currentAppConfig, &cfg)
-
-	// 确保至少有基本配置
-	isGateway := lc.ServerName == "gateway"
-	lc.configMgr.EnsureBasicConfig(currentAppConfig, isGateway)
+	// 先合并appCfg到cfg中，这样服务特定配置会覆盖共享配置
+	if err := mergoConfig(&cfg, &appCfg); err != nil {
+		return fmt.Errorf("failed to merge configs: %w", err)
+	}
 
 	// 更新全局配置
-	globalAppConfig = currentAppConfig
+	globalAppConfig = &cfg
 
-	// 验证配置的有效性
-	if err := globalAppConfig.Validate(isGateway); err != nil {
-		return fmt.Errorf("configuration validation failed: %w", err)
+	return nil
+}
+
+// mergoConfig 合并两个配置对象
+func mergoConfig(dst, src *entities.AppConfig) error {
+	if dst.Log == (entities.LogConfig{}) {
+		dst.Log = src.Log
 	}
+
+	if dst.Loki == (entities.LokiConfig{}) {
+		dst.Loki = src.Loki
+	}
+
+	if dst.Database == (entities.DatabaseConfig{}) {
+		dst.Database = src.Database
+	} else {
+		// 只有当目标配置中的字段为空时才从源配置复制
+		if dst.Database.Type == "" {
+			dst.Database.Type = src.Database.Type
+		}
+		if dst.Database.Host == "" {
+			dst.Database.Host = src.Database.Host
+		}
+		if dst.Database.Port == 0 {
+			dst.Database.Port = src.Database.Port
+		}
+		if dst.Database.UserName == "" && src.Database.UserName != "" {
+			dst.Database.UserName = src.Database.UserName
+		}
+		if dst.Database.Password == "" && src.Database.Password != "" {
+			dst.Database.Password = src.Database.Password
+		}
+		if dst.Database.Database == "" {
+			dst.Database.Database = src.Database.Database
+		}
+		if dst.Database.MaxIdleConns == 0 {
+			dst.Database.MaxIdleConns = src.Database.MaxIdleConns
+		}
+		if dst.Database.MaxOpenConns == 0 {
+			dst.Database.MaxOpenConns = src.Database.MaxOpenConns
+		}
+		if dst.Database.ConnMaxLifetime == 0 {
+			dst.Database.ConnMaxLifetime = src.Database.ConnMaxLifetime
+		}
+		if dst.Database.ConnMaxIdleTime == 0 {
+			dst.Database.ConnMaxIdleTime = src.Database.ConnMaxIdleTime
+		}
+	}
+
+	if dst.OAuth2 == (entities.OAuth2Config{}) {
+		dst.OAuth2 = src.OAuth2
+	}
+
+	// Server配置通常来自服务特定配置文件，不需要合并
 
 	return nil
 }

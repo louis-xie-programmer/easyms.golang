@@ -6,10 +6,11 @@
 // - 动态日志级别控制
 // - 服务标识与模块分类
 // - 异步日志写入
+// - 监控指标支持
 package logger
 
 import (
-	"easyms/internal/shared/entities"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -122,24 +123,29 @@ func (z *ZerologLogger) rotateLogger() {
 // 参数:
 //
 //	entry - 日志条目
-func (z *ZerologLogger) writeLog(entry entities.LogEntry) {
-	event := z.logger.With().
+func (z *ZerologLogger) writeLog(entry LogEntry) {
+	logger := z.logger.With().
 		Str("app", entry.Service).
 		Str("module", entry.Module).
-		Fields(entry.Extra).
-		Logger()
+		Fields(entry.Extra).Logger()
+
+	// 如果有错误信息，则添加到日志中
+	if entry.Error != "" {
+		logger.Err(fmt.Errorf(entry.Error)).Msg(entry.Message)
+		return
+	}
 
 	switch strings.ToUpper(entry.Level) {
 	case "DEBUG":
-		event.Debug().Msg(entry.Message)
+		logger.Debug().Msg(entry.Message)
 	case "INFO":
-		event.Info().Msg(entry.Message)
+		logger.Info().Msg(entry.Message)
 	case "WARN":
-		event.Warn().Msg(entry.Message)
+		logger.Warn().Msg(entry.Message)
 	case "ERROR":
-		event.Error().Str("error", entry.Error).Msg(entry.Message)
+		logger.Error().Msg(entry.Message)
 	default:
-		event.Info().Msg(entry.Message)
+		logger.Info().Msg(entry.Message)
 	}
 }
 
@@ -148,7 +154,7 @@ func (z *ZerologLogger) writeLog(entry entities.LogEntry) {
 // 参数:
 //
 //	logs - 日志条目
-func (l *ZerologLogger) Log(logs []entities.LogEntry) error {
+func (l *ZerologLogger) Log(logs []LogEntry) error {
 	for _, entry := range logs {
 		if !shouldLog(entry.Level) {
 			continue
@@ -156,6 +162,28 @@ func (l *ZerologLogger) Log(logs []entities.LogEntry) error {
 		l.writeLog(entry)
 	}
 	return nil
+}
+
+// UpdateLogLevel 更新日志级别（支持动态配置更新）
+func (l *ZerologLogger) UpdateLogLevel(level string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.logLevel = strings.ToLower(level)
+
+	// 重新设置logger的日志级别
+	switch level {
+	case "debug":
+		l.logger = l.logger.Level(zerolog.DebugLevel)
+	case "info":
+		l.logger = l.logger.Level(zerolog.InfoLevel)
+	case "warn":
+		l.logger = l.logger.Level(zerolog.WarnLevel)
+	case "error":
+		l.logger = l.logger.Level(zerolog.ErrorLevel)
+	default:
+		l.logger = l.logger.Level(zerolog.InfoLevel)
+	}
 }
 
 // Close 关闭日志记录器
