@@ -5,6 +5,7 @@ type GatewayConfig struct {
 	RouteRules     []*RouteRule          `yaml:"route_rules" json:"route_rules"`
 	RateLimit      *RateLimitConfig      `yaml:"rate_limit" json:"rate_limit"`
 	CircuitBreaker *CircuitBreakerConfig `yaml:"circuit_breaker" json:"circuit_breaker"`
+	Auth           *AuthConfig            `yaml:"auth" json:"auth"` // 新增：认证配置
 }
 
 // RouteRule 路由规则配置

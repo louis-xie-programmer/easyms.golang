@@ -4,8 +4,10 @@ import (
 	"easyms/internal/services/auth/internal/consts"
 	"easyms/internal/services/auth/internal/service"
 	"easyms/internal/shared/models"
-	"github.com/gin-gonic/gin"
 	"net/http"
+	"strings"
+
+	"github.com/gin-gonic/gin"
 )
 
 // MakeTokenEndpoint 用于生成访问令牌(客户端公共令牌)
@@ -59,6 +61,27 @@ func MakeTokenEndpoint(svc service.TokenGranter, clientdetailsService service.Cl
 		}
 
 		c.JSON(http.StatusOK, response)
+	}
+}
+
+func VerifyTokenEndpoint(tokenService service.TokenService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		authHeader := c.GetHeader("Authorization")
+		if !strings.HasPrefix(authHeader, "Bearer ") {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Missing token"})
+			return
+		}
+		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
+
+		// 使用tokenService验证令牌
+		_, err := tokenService.GetOAuth2DetailsByAccessToken(tokenStr)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token", "detail": err.Error()})
+			return
+		}
+
+		// 令牌有效，返回成功
+		c.JSON(http.StatusOK, gin.H{"valid": true})
 	}
 }
 

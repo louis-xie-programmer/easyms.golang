@@ -40,3 +40,8 @@ gateway:
         half_open_max_successes: 3
         failure_rate_window: 15
         failure_rate_threshold: 0.3
+
+# 新增：网关自身用于认证的客户端凭证
+auth:
+  client_id: "gateway-client"
+  client_secret: "gateway-secret"

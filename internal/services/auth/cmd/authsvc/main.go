@@ -141,7 +141,7 @@ func main() {
 		configHandler.RegisterConfigRoutes(g)
 	}
 
-	// 第1步. 通过ClientId,ClientSecret 来获取客户端默认的授权令牌，注意默认用户直接存储在数据库中，通过客户端Id和ClientSecret进行认证，同时从数据库中查询默认用户信息，最终生成访问令牌
+	// 第1步. 通过ClientId,ClientSecret 来获取客户端默认的授权令牌
 	g.POST("/oauth2/token", handles.MakeTokenEndpoint(tokenGranter, clientDetailsService))
 
 	// 默认的客户端授权令牌刷新接口，默认用户信息存储在令牌中，未登录的用户直接使用默认令牌访问，当令牌快速过期时，可以通过此接口刷新令牌

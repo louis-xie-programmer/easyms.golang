@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"easyms/internal/platform/gateway/internal/domain/model"
+	"github.com/mercari/go-circuitbreaker"
 	"gopkg.in/yaml.v2"
 	"io"
 	"log"
@@ -15,7 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mercari/go-circuitbreaker"
 	"golang.org/x/time/rate"
 
 	"easyms/internal/shared/discovery"
