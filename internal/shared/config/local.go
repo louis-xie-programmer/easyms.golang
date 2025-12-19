@@ -135,6 +135,27 @@ func mergoConfig(dst, src *entities.AppConfig) error {
 		dst.OAuth2 = src.OAuth2
 	}
 
+	// 合并Cache.Redis配置
+	if dst.Cache.Redis == (entities.RedisConfig{}) {
+		dst.Cache.Redis = src.Cache.Redis
+	} else {
+		if dst.Cache.Redis.Address == "" {
+			dst.Cache.Redis.Address = src.Cache.Redis.Address
+		}
+		if dst.Cache.Redis.Password == "" {
+			dst.Cache.Redis.Password = src.Cache.Redis.Password
+		}
+		if dst.Cache.Redis.DB == 0 {
+			dst.Cache.Redis.DB = src.Cache.Redis.DB
+		}
+		if dst.Cache.Redis.NullCacheExpire == 0 {
+			dst.Cache.Redis.NullCacheExpire = src.Cache.Redis.NullCacheExpire
+		}
+		if dst.Cache.Redis.MutexExpire == 0 {
+			dst.Cache.Redis.MutexExpire = src.Cache.Redis.MutexExpire
+		}
+	}
+
 	// Server配置通常来自服务特定配置文件，不需要合并
 
 	return nil

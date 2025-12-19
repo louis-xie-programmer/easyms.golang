@@ -37,6 +37,7 @@ func NewEasyRedis(address *string, password *string, dbNum *int) (*EasyRedis, er
 		Addr:     *address,  // Redis服务器地址
 		Password: *password, // 密码（如果有的话）
 		DB:       *dbNum,    // 使用的数据库编号
+		MaxRetries: 3,         // 最大重试次数
 	})
 
 	// 测试连接
@@ -314,4 +315,9 @@ func (r *EasyRedis) releaseLock(key string) error {
 		end
 	`
 	return r.redis.Eval(ctx, script, []string{key}, "1").Err()
+}
+
+func (r *EasyRedis) SetEx(key string, value interface{}, expireSeconds int) error {
+	ctx := context.Background()
+	return r.redis.Set(ctx, key, value, time.Duration(expireSeconds)*time.Second).Err()
 }

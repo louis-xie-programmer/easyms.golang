@@ -6,6 +6,10 @@
 package storage
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+
 	"easyms/internal/shared/db"
 	"easyms/internal/shared/logger"
 	. "easyms/internal/shared/models"
@@ -28,29 +32,26 @@ type TokenStore interface {
 	ReadAccessToken(tokenValue string) (*OAuth2Token, error)
 	// ReadOAuth2Details 根据令牌值获取令牌对应的客户端和用户信息
 	ReadOAuth2Details(tokenValue string) (*OAuth2Details, error)
+
 	// RemoveAccessToken 移除存储的访问令牌
 	RemoveAccessToken(tokenValue string)
 	// RemoveRefreshToken 移除存储的刷新令牌
 	RemoveRefreshToken(oauth2Token string)
-	// ReadRefreshToken 根据令牌值获取刷新令牌
-	ReadRefreshToken(tokenValue string) (*OAuth2Token, error)
-	// ReadOAuth2DetailsForRefreshToken 根据令牌值获取刷新令牌对应的客户端和用户信息
-	ReadOAuth2DetailsForRefreshToken(tokenValue string) (*OAuth2Details, error)
+
 	// IsAccessTokenRevoked 检查访问令牌是否被撤销
 	IsAccessTokenRevoked(tokenValue string) (bool, error)
-	// IsRefreshTokenRevoked 检查刷新令牌是否被撤销
-	IsRefreshTokenRevoked(tokenValue string) (bool, error)
 }
 
 // NewJwtTokenStore 创建新的JWT令牌存储实例,
 // 当前版本令牌存储在JWT令牌中，无需额外存储操作
 // 参数:
 //   - jwtTokenEnhancer: JWT令牌增强器
-//   - db: 数据库实例
+//   - db: 数据库实例（保留用于兼容）
+//   - redisClient: Redis客户端（用于高性能令牌撤销）
 //
 // 返回值:
 //   - TokenStore: 令牌存储实例
-func NewJwtTokenStore(jwtTokenEnhancer *JwtTokenEnhancer, db db.Database) TokenStore {
+func NewJwtTokenStore(jwtTokenEnhancer *JwtTokenEnhancer, db db.Database, redisClient *db.EasyRedis) TokenStore {
 	// 自动迁移创建撤销令牌表
 	if db != nil {
 		err := db.AutoMigrate(&RevokedToken{})
@@ -64,13 +65,15 @@ func NewJwtTokenStore(jwtTokenEnhancer *JwtTokenEnhancer, db db.Database) TokenS
 	return &JwtTokenStore{
 		jwtTokenEnhancer: jwtTokenEnhancer,
 		db:               db,
+		redis:            redisClient,
 	}
 }
 
 // JwtTokenStore JWT令牌存储实现
 type JwtTokenStore struct {
 	jwtTokenEnhancer *JwtTokenEnhancer // JWT令牌增强器
-	db               db.Database       // 数据库实例
+	db               db.Database       // 数据库实例（保留用于兼容）
+	redis            *db.EasyRedis        // Redis客户端，用于高性能令牌撤销
 }
 
 // ReadAccessToken 根据令牌值获取访问令牌结构体
@@ -118,11 +121,27 @@ func (tokenStore *JwtTokenStore) ReadOAuth2Details(tokenValue string) (*OAuth2De
 }
 
 // RemoveAccessToken 移除存储的访问令牌
-// 实现JWT令牌的撤销功能
+// 实现JWT令牌的撤销功能，优先使用Redis，降级到数据库
 // 参数:
 //   - tokenValue: 令牌值
 func (tokenStore *JwtTokenStore) RemoveAccessToken(tokenValue string) {
-	// JWT令牌是自包含的，撤销操作需要维护黑名单
+	// 优先使用Redis
+	if tokenStore.redis != nil {
+		// 使用哈希值缩短存储键长度
+		hash := getTokenHash(tokenValue)
+		oauth2Token, _, _ := tokenStore.jwtTokenEnhancer.Extract(tokenValue)
+		err := tokenStore.redis.SetEx(
+			fmt.Sprintf("token:access:%s", hash), 
+			"revoked",
+			int(time.Until(*oauth2Token.ExpiresTime).Seconds()),
+		)
+		if err != nil {
+			logger.Error(err, "redis set failed", "auth-svc", nil)
+		}
+		return
+	}
+
+	// 降级到数据库（保留兼容）
 	if tokenStore.db != nil {
 		// 检查令牌是否已经在黑名单中
 		var count int64
@@ -174,28 +193,6 @@ func (tokenStore *JwtTokenStore) RemoveRefreshToken(tokenValue string) {
 	}
 }
 
-// ReadRefreshToken 根据令牌值获取刷新令牌
-// 参数:
-//   - tokenValue: 令牌值
-//
-// 返回值:
-//   - *OAuth2Token: 刷新令牌结构体
-//   - error: 操作成功返回nil，失败返回具体错误
-func (tokenStore *JwtTokenStore) ReadRefreshToken(tokenValue string) (*OAuth2Token, error) {
-	// 检查令牌是否被撤销
-	revoked, err := tokenStore.IsRefreshTokenRevoked(tokenValue)
-	if err != nil {
-		return nil, err
-	}
-	if revoked {
-		return nil, ErrTokenRevoked
-	}
-
-	// 从JWT令牌中提取信息
-	oauth2Token, _, err := tokenStore.jwtTokenEnhancer.Extract(tokenValue)
-	return oauth2Token, err
-}
-
 // ReadOAuth2DetailsForRefreshToken 根据令牌值获取刷新令牌对应的客户端和用户信息
 // 参数:
 //   - tokenValue: 令牌值
@@ -226,19 +223,25 @@ func (tokenStore *JwtTokenStore) ReadOAuth2DetailsForRefreshToken(tokenValue str
 //   - bool: 撤销返回true，否则返回false
 //   - error: 操作成功返回nil，失败返回具体错误
 func (tokenStore *JwtTokenStore) IsAccessTokenRevoked(tokenValue string) (bool, error) {
-	if tokenStore.db == nil {
-		// 没有数据库支持，无法检查撤销状态
-		return false, nil
+	// 优先使用Redis
+	if tokenStore.redis != nil {
+		hash := getTokenHash(tokenValue)
+		val, err := tokenStore.redis.GetCache(fmt.Sprintf("token:access:%s", hash))
+	return val != "" && err == nil, nil
+		return err == nil, err
 	}
 
-	// 查询数据库检查令牌是否在撤销列表中
-	var count int64
-	err := tokenStore.db.GetDB().Model(&RevokedToken{}).Where("token_value = ?", tokenValue).Count(&count).Error
-	if err != nil {
-		return false, err
+	// 降级到数据库
+	if tokenStore.db != nil {
+		// 查询数据库检查令牌是否在撤销列表中
+		var count int64
+		err := tokenStore.db.GetDB().Model(&RevokedToken{}).Where("token_value = ?", tokenValue).Count(&count).Error
+		if err != nil {
+			return false, err
+		}
+		return count > 0, nil
 	}
-
-	return count > 0, nil
+	return false, nil
 }
 
 // IsRefreshTokenRevoked 检查刷新令牌是否被撤销
@@ -384,6 +387,11 @@ func (enhancer *JwtTokenEnhancer) Extract(tokenValue string) (*OAuth2Token, *OAu
 // 返回值:
 //   - *OAuth2Token: 签名后的OAuth2令牌
 //   - error: 操作成功返回nil，失败返回具体错误
+func getTokenHash(tokenValue string) string {
+	hash := sha256.Sum256([]byte(tokenValue))
+	return hex.EncodeToString(hash[:4])
+}
+
 func (enhancer *JwtTokenEnhancer) sign(oauth2Token *OAuth2Token, oauth2Details *OAuth2Details) (*OAuth2Token, error) {
 	// 获取过期时间
 	expireTime := oauth2Token.ExpiresTime

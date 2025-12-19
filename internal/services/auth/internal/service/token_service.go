@@ -36,6 +36,9 @@ func NewTokenService(tokenStore storage.TokenStore, tokenEnhancer storage.TokenE
 func (tokenService *DefaultTokenService) CreateAccessToken(oauth2Details *OAuth2Details) (*OAuth2Token, error) {
 	var refreshToken *OAuth2Token
 	refreshToken, err := tokenService.createRefreshToken(oauth2Details)
+	if err != nil {
+		return nil, err
+	}
 	// 生成新的访问令牌
 	accessToken, err := tokenService.createAccessToken(refreshToken, oauth2Details)
 	return accessToken, err
@@ -75,14 +78,14 @@ func (tokenService *DefaultTokenService) createRefreshToken(oauth2Details *OAuth
 }
 
 func (tokenService *DefaultTokenService) RefreshAccessToken(refreshTokenValue string) (*OAuth2Token, error) {
-	refreshToken, err := tokenService.tokenStore.ReadRefreshToken(refreshTokenValue)
+	refreshToken, err := tokenService.tokenStore.ReadAccessToken(refreshTokenValue)
 	if err == nil {
 		// 判断刷新令牌是否已过期
 		if refreshToken.IsExpired() {
 			return nil, consts.ErrExpiredToken
 		}
 		// 读取刷新令牌对应的用户信息和客户端信息
-		oauth2Details, err := tokenService.tokenStore.ReadOAuth2DetailsForRefreshToken(refreshTokenValue)
+		oauth2Details, err := tokenService.tokenStore.ReadOAuth2Details(refreshTokenValue)
 		if err == nil {
 			tokenService.tokenStore.RemoveRefreshToken(refreshTokenValue)
 			refreshToken, err = tokenService.createRefreshToken(oauth2Details)

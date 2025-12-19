@@ -1,5 +1,5 @@
 env: dev
-store_type: consul
+store_type: local
 consul:
   host: "localhost:8500"
   key_path: easyms/share/${env};easyms/${server_name}/${env}

@@ -11,6 +11,7 @@ import (
 	"easyms/internal/shared/discovery"
 	"easyms/internal/shared/logger"
 	"fmt"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -18,6 +19,8 @@ import (
 func main() {
 	// 认证服务名称和端口
 	serverName := "auth-svc"
+
+	var err error
 
 	// 初始化应用配置存储
 	// 读取 configs/app.yaml 配置文件
@@ -108,8 +111,45 @@ func main() {
 		panic(err)
 	}
 
-	// 通过依赖注入创建服务
-	tokenStore := storage.NewJwtTokenStore(tokenEnhancer.(*storage.JwtTokenEnhancer), dbase)
+	// 初始化健康检查组件
+	healthChecker := service.NewHealthCheckerService(dbase)
+
+	// 尝试连接Redis
+	logger.Info(
+		"Attempting to connect to Redis",
+		serverName,
+		[][]string{
+			{"address", appConfig.Cache.Redis.Address},
+			{"db", fmt.Sprintf("%d", appConfig.Cache.Redis.DB)},
+		},
+	)
+	redisClient, err := db.NewEasyRedis(
+		&appConfig.Cache.Redis.Address,
+		&appConfig.Cache.Redis.Password,
+		&appConfig.Cache.Redis.DB,
+	)
+
+	// 创建token存储，支持Redis降级到内存
+	var tokenStore storage.TokenStore
+
+	if err == nil {
+		// Redis连接成功
+		tokenStore = storage.NewJwtTokenStore(
+			tokenEnhancer.(*storage.JwtTokenEnhancer),
+			dbase,
+			redisClient,
+		)
+	} else {
+		// Redis连接失败 - 降级到内存存储
+		logger.Warn(
+			"Redis connection failed, falling back to in-memory storage",
+			serverName,
+			[][]string{
+				{"error", err.Error()},
+				{"address", appConfig.Cache.Redis.Address},
+			},
+		)
+	}
 	tokenService = service.NewTokenService(tokenStore, tokenEnhancer)
 
 	// 初始化用户详情服务
@@ -130,9 +170,10 @@ func main() {
 	g := gin.Default()
 
 	// 健康检查端点
-	// 提供健康检查接口，供Consul等监控系统使用
+	// 提供深度健康检查接口，验证关键依赖状态
 	g.GET("/health", func(c *gin.Context) {
-		c.String(200, "ok")
+		status := healthChecker.CheckHealth()
+		c.JSON(200, status)
 	})
 
 	// 配置管理端点 (仅在Consul配置存储时启用)

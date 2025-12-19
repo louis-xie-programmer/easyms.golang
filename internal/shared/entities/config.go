@@ -37,6 +37,12 @@ type AppConfig struct {
 	ConfigLock sync.RWMutex `yaml:"-"`
 
 	OAuth2 OAuth2Config `yaml:"oauth2"`
+
+	Cache struct {
+		Redis RedisConfig `yaml:"redis,omitempty"`
+	} `yaml:"cache,omitempty"`
+
+	Redis RedisConfig `yaml:"redis,omitempty"`
 }
 
 // ServerConfig 定义服务器配置
