@@ -1,8 +1,9 @@
 package model
 
 import (
-	"golang.org/x/crypto/bcrypt"
 	"strings"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 // UserDetails 用户详情模型
@@ -15,7 +16,7 @@ type UserDetails struct {
 	Password string `json:"-" gorm:"-"`
 	// 用户密码哈希值（存储到数据库）
 	PasswordHash string `json:"passwordHash" gorm:"column:password_hash;type:varchar(128);not null"`
-	// 用户具有的权限，多个权限用逗号分隔
+	// 用户具有的权限scope，多个权限用逗号分隔
 	Authorities string `json:"authorities" gorm:"column:authorities;type:varchar(255)"`
 }
 

@@ -3,12 +3,31 @@ package handles
 import (
 	"easyms/internal/services/auth/internal/consts"
 	"easyms/internal/services/auth/internal/service"
-	"easyms/internal/shared/models"
+	model "easyms/internal/shared/models"
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 )
+
+// respondWithToken 封装了统一的令牌响应逻辑
+func respondWithToken(c *gin.Context, token *model.OAuth2Token, err error) {
+	if err != nil {
+		// 根据错误类型返回不同的HTTP状态码
+		if errors.Is(err, consts.ErrInvalidClient) || errors.Is(err, consts.ErrInvalidUsernameAndPasswordRequest) {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, model.TokenResponse{
+		AccessToken:  token,
+		RefreshToken: token.RefreshToken, // RefreshToken可能为nil，这没问题
+	})
+}
 
 // MakeTokenEndpoint 用于生成访问令牌(客户端公共令牌)
 func MakeTokenEndpoint(svc service.TokenGranter, clientdetailsService service.ClientDetailsService) gin.HandlerFunc {
@@ -20,47 +39,30 @@ func MakeTokenEndpoint(svc service.TokenGranter, clientdetailsService service.Cl
 		}
 		// 检查授权类型是否支持
 		if req.GrantType != "client_credentials" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "grant type is not supported"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": consts.ErrNotSupportGrantType.Error()})
 			return
 		}
 
 		if req.ClientId == "" || req.ClientSecret == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "client_id or client_secret is empty"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "client_id and client_secret are required"})
 			return
 		}
 
 		clientDetails, err := clientdetailsService.LoadClientByClientId(req.ClientId)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.JSON(http.StatusUnauthorized, gin.H{"error": consts.ErrInvalidClient.Error()})
 			return
 		}
 
 		if clientDetails == nil || clientDetails.ClientSecret != req.ClientSecret {
-			c.JSON(http.StatusBadRequest, gin.H{"error": consts.ErrInvalidClient.Error()})
+			c.JSON(http.StatusUnauthorized, gin.H{"error": consts.ErrInvalidClient.Error()})
 			return
 		}
 
-		// 验证以下
 		token, err := svc.Grant(c, req.GrantType, clientDetails, &model.TokenRequest{
 			GrantType: req.GrantType,
 		})
-
-		var errString = ""
-		if err != nil {
-			errString = err.Error()
-		}
-
-		response := model.TokenResponse{
-			AccessToken: token,
-			Error:       errString,
-		}
-
-		// 如果令牌包含刷新令牌，也在响应中包含
-		if token != nil && token.RefreshToken != nil {
-			response.RefreshToken = token.RefreshToken
-		}
-
-		c.JSON(http.StatusOK, response)
+		respondWithToken(c, token, err)
 	}
 }
 
@@ -85,6 +87,55 @@ func VerifyTokenEndpoint(tokenService service.TokenService) gin.HandlerFunc {
 	}
 }
 
+// RegisterClientEndPoint 注册客户端端点
+func RegisterClientEndPoint(service service.ClientDetailsService) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		req := &model.RegisterClientRequest{}
+		if err := ctx.ShouldBindJSON(req); err != nil {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request", "detail": err.Error()})
+			return
+		}
+
+		// 验证客户端
+		clientDetails, err := service.CreateClientDetails(req.ClientId)
+		if err != nil {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": "Failed to register client", "detail": err.Error()})
+			return
+		}
+
+		ctx.JSON(http.StatusOK, model.RegisterClientResponse{
+			ClientId:     clientDetails.ClientId,
+			ClientSecret: clientDetails.ClientSecret,
+		})
+	}
+}
+
+// RegisterUserEndPoint 注册用户端点
+func RegisterUserEndPoint(service service.UserDetailsService, authorities []string) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		req := &model.RegisterUserRequest{}
+		if err := ctx.ShouldBindJSON(req); err != nil {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request", "detail": err.Error()})
+			return
+		}
+		if req.Password == "" || req.Username == "" {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": "username and password are required"})
+			return
+		}
+		//
+		if clientDetail, ok := ctx.Value("OAuth2ClientDetailsKey").(model.ClientDetails); ok {
+			_, err := service.CreateUserDetails(req.Username, req.Password, authorities, clientDetail.ClientId)
+			if err != nil {
+				ctx.JSON(http.StatusBadRequest, gin.H{"error": "Failed to register user", "detail": err.Error()})
+				return
+			}
+			ctx.JSON(http.StatusOK, gin.H{"message": "User registered successfully"})
+		} else {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+		}
+	}
+}
+
 // LoginEndPoint 处理登录请求, 需要带客户端共享令牌
 func LoginEndPoint(userDetailsService service.UserDetailsService, tokenService service.TokenService) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -94,50 +145,32 @@ func LoginEndPoint(userDetailsService service.UserDetailsService, tokenService s
 			return
 		}
 		if req.Username == "" || req.Password == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "username or password is empty"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "username and password are required"})
 			return
 		}
 
 		// 加载用户详情（而不是直接通过用户名和密码获取）
 		userDetails, err := userDetailsService.LoadUserByUsername(req.Username)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			// 避免暴露“用户不存在”的细节，统一返回认证失败
+			c.JSON(http.StatusUnauthorized, gin.H{"error": consts.ErrInvalidUsernameAndPasswordRequest.Error()})
 			return
 		}
 
 		// 手动验证密码
 		if !userDetails.CheckPassword(req.Password) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid username or password"})
+			c.JSON(http.StatusUnauthorized, gin.H{"error": consts.ErrInvalidUsernameAndPasswordRequest.Error()})
 			return
 		}
 
-		// 因为中间件已经验证过了客户端详情，这里就不需要再次验证了
-		//clientDetails, ok := c.Value(consts.OAuth2ClientDetailsKey).(*model.ClientDetails)
-		//if !ok {
-		//	c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": consts.ErrInvalidClient.Error()})
-		//}
+		clientDetails, _ := c.Value(consts.OAuth2ClientDetailsKey).(*model.ClientDetails)
 
 		token, err := tokenService.CreateAccessToken(&model.OAuth2Details{
 			User:   userDetails,
-			Client: c.Value(consts.OAuth2ClientDetailsKey).(*model.ClientDetails),
+			Client: clientDetails,
 		})
 
-		var errString = ""
-		if err != nil {
-			errString = err.Error()
-		}
-
-		response := model.TokenResponse{
-			AccessToken: token,
-			Error:       errString,
-		}
-
-		// 如果令牌包含刷新令牌，也在响应中包含
-		if token != nil && token.RefreshToken != nil {
-			response.RefreshToken = token.RefreshToken
-		}
-
-		c.JSON(http.StatusOK, response)
+		respondWithToken(c, token, err)
 	}
 }
 
@@ -155,27 +188,11 @@ func RefreshTokenEndpoint(tokenService service.TokenService) gin.HandlerFunc {
 			return
 		}
 
-		// 中间件已经验证过了客户端详情，这里就不需要再次验证了
-		//clientDetails, ok := c.Value(consts.OAuth2ClientDetailsKey).(*model.ClientDetails)
-		//if !ok {
-		//	c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid client"})
-		//}
-
 		newAccessToken, err := tokenService.RefreshAccessToken(req.RefreshToken)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 			return
 		}
-
-		response := model.TokenResponse{
-			AccessToken: newAccessToken,
-		}
-
-		// 如果新的访问令牌包含刷新令牌，也在响应中包含
-		if newAccessToken != nil && newAccessToken.RefreshToken != nil {
-			response.RefreshToken = newAccessToken.RefreshToken
-		}
-
-		c.JSON(http.StatusOK, response)
+		respondWithToken(c, newAccessToken, err)
 	}
 }

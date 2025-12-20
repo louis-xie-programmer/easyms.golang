@@ -14,6 +14,9 @@ type PostgresDatabase struct {
 }
 
 // NewPostgresDatabase 创建PostgreSQL数据库实例
+// 确保PostgresDatabase实现了DatabaseInterface接口
+var _ Database = &PostgresDatabase{}
+
 func NewPostgresDatabase(db *gorm.DB) *PostgresDatabase {
 	return &PostgresDatabase{
 		EasyDatabase: &EasyDatabase{DB: db, DBType: "postgres"},
@@ -37,22 +40,22 @@ func (pd *PostgresDatabase) AutoMigrate(models ...interface{}) error {
 		for i := 0; i < t.NumField(); i++ {
 			field := t.Field(i)
 			gormTag := field.Tag.Get("gorm")
-			
+
 			// 检查是否有text[]或varchar[]类型的字段
 			if strings.Contains(strings.ToLower(gormTag), "text[]") ||
 				strings.Contains(strings.ToLower(gormTag), "varchar[]") {
 				// 如果是PgStringArray类型，我们不需要特殊处理
-				if field.Type == reflect.TypeOf(PgStringArray{}) || 
-				   (field.Type.Kind() == reflect.Ptr && field.Type.Elem() == reflect.TypeOf(PgStringArray{})) {
+				if field.Type == reflect.TypeOf(PgStringArray{}) ||
+					(field.Type.Kind() == reflect.Ptr && field.Type.Elem() == reflect.TypeOf(PgStringArray{})) {
 					continue
 				}
-				
+
 				// 如果不是PgStringArray类型但标记为数组，则打印警告
 				fmt.Printf("Warning: Field %s is marked as array type but is not PgStringArray\n", field.Name)
 			}
 		}
 	}
-	
+
 	return pd.DB.AutoMigrate(models...)
 }
 
@@ -90,7 +93,7 @@ func (pd *PostgresDatabase) convertArrays(value interface{}) interface{} {
 				}
 			}
 		}
-		
+
 		// 检查字段是否为*PgStringArray类型
 		if fv.Kind() == reflect.Ptr && fv.Type().Elem() == reflect.TypeOf(PgStringArray{}) {
 			if !fv.IsNil() {
@@ -106,10 +109,10 @@ func (pd *PostgresDatabase) convertArrays(value interface{}) interface{} {
 func (pd *PostgresDatabase) Insert(value interface{}) error {
 	// 先转换数组字段
 	v := pd.convertArrays(value)
-	
+
 	// 使用 Session 创建一个新会话
 	session := pd.DB.Session(&gorm.Session{})
-	
+
 	// 执行插入操作
 	return session.Create(v).Error
 }
@@ -127,25 +130,25 @@ func (pd *PostgresDatabase) Query(dest interface{}, query string, args ...interf
 			for i := 0; i < t.NumField(); i++ {
 				field := t.Field(i)
 				fv := elem.Field(i)
-				
+
 				// 检查字段是否为*PgStringArray类型
 				if fv.Kind() == reflect.Ptr && fv.Type().Elem() == reflect.TypeOf(PgStringArray{}) {
 					gormTag := field.Tag.Get("gorm")
 					// 检查是否为PostgreSQL数组类型
 					if strings.Contains(strings.ToLower(gormTag), "text[]") ||
-					   strings.Contains(strings.ToLower(gormTag), "varchar[]") {
+						strings.Contains(strings.ToLower(gormTag), "varchar[]") {
 						// 创建PgStringArray实例并赋值给字段
 						pgArray := &PgStringArray{}
 						fv.Set(reflect.ValueOf(pgArray))
 					}
 				}
-				
+
 				// 检查字段是否为PgStringArray类型
 				if fv.Type() == reflect.TypeOf(PgStringArray{}) {
 					gormTag := field.Tag.Get("gorm")
 					// 检查是否为PostgreSQL数组类型
 					if strings.Contains(strings.ToLower(gormTag), "text[]") ||
-					   strings.Contains(strings.ToLower(gormTag), "varchar[]") {
+						strings.Contains(strings.ToLower(gormTag), "varchar[]") {
 						// 创建PgStringArray实例并赋值给字段
 						pgArray := &PgStringArray{}
 						fv.Set(reflect.ValueOf(pgArray))
@@ -154,7 +157,7 @@ func (pd *PostgresDatabase) Query(dest interface{}, query string, args ...interf
 			}
 		}
 	}
-	
+
 	return pd.DB.Raw(query, args...).Scan(dest).Error
 }
 

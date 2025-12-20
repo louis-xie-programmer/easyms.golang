@@ -25,6 +25,20 @@ type LoginRequest struct {
 	Password string `json:"password"`
 }
 
+type RegisterClientRequest struct {
+	ClientId string `json:"client_id"`
+}
+
+type RegisterClientResponse struct {
+	ClientId     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+}
+
+type RegisterUserRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
 type ClientTokenRequest struct {
 	GrantType    string `json:"grant_type"`
 	ClientId     string `json:"client_id"`

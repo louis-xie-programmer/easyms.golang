@@ -1,11 +1,11 @@
 package service
 
 import (
-	"context"
 	"easyms/internal/shared/db"
 	. "easyms/internal/shared/models"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 var (
@@ -18,6 +18,10 @@ var (
 type UserDetailsService interface {
 	// LoadUserByUsername 根据用户名加载用户详情
 	LoadUserByUsername(username string) (*UserDetails, error)
+	// GetUserAllowedScopes 获取用户允许的scope列表
+	GetUserAllowedScopes(userId int64) []string
+	// CreateUser 创建 用户
+	CreateUserDetails(username, password string, authorities []string, clientId string) (*UserDetails, error)
 }
 
 // PostgresUserDetailsService 基于PostgreSQL的用户详情服务实现
@@ -63,50 +67,58 @@ func (service *PostgresUserDetailsService) LoadUserByUsername(username string) (
 	return userDetails, nil
 }
 
-// InMemoryUserDetailsService 内存用户详情服务
-type InMemoryUserDetailsService struct {
-	userDetailsDict map[string]*UserDetails
+func (service *PostgresUserDetailsService) GetUserAllowedScopes(userId int64) []string {
+	// 从数据库中获取用户的权限scope
+	querySql := fmt.Sprintf("SELECT authorities FROM user_details WHERE user_id = %d", userId)
+
+	var user UserDetails
+	err := service.db.Query(&user, querySql)
+	if err != nil {
+		return []string{}
+	}
+
+	return user.GetAuthorities()
 }
 
-func (service *InMemoryUserDetailsService) GetUserDetailByUsername(ctx context.Context, username, password string) (*UserDetails, error) {
-	// 根据 username 获取用户信息
-	userDetails, ok := service.userDetailsDict[username]
-	if ok {
-		// 比较 password 是否匹配
-		if userDetails.CheckPassword(password) {
-			return userDetails, nil
-		} else {
-			return nil, ErrPassword
-		}
-	} else {
-		return nil, ErrUserNotExist
+func (service *PostgresUserDetailsService) CreateUserDetails(username, password string, authorities []string, clientId string) (*UserDetails, error) {
+	// 校验用户是否存在
+	var count int64
+	err := service.db.GetDB().Table("user_details").Count(&count).Error
+	if err != nil {
+		fmt.Printf("查询失败: %v\n", err)
+		return nil, err
 	}
-}
-
-func (service *InMemoryUserDetailsService) LoadUserByUsername(username string) (*UserDetails, error) {
-	// 根据 username 获取用户信息
-	userDetails, ok := service.userDetailsDict[username]
-	if ok {
-		return userDetails, nil
-	} else {
-		return nil, ErrUserNotExist
-	}
-}
-
-func NewInMemoryUserDetailsService(userDetailsList []*UserDetails) UserDetailsService {
-	userDetailsDict := make(map[string]*UserDetails)
-
-	if userDetailsList != nil {
-		for _, value := range userDetailsList {
-			// 为内存中的用户生成密码哈希
-			if value.Password != "" && value.PasswordHash == "" {
-				value.HashPassword()
-			}
-			userDetailsDict[value.Username] = value
-		}
+	if count > 0 {
+		return nil, fmt.Errorf("用户已经存在")
 	}
 
-	return &InMemoryUserDetailsService{
-		userDetailsDict: userDetailsDict,
+	userDetails := &UserDetails{
+		Username:     username,
+		PasswordHash: password,
+		Authorities:  strings.Join(authorities, ","),
 	}
+
+	err = userDetails.HashPassword()
+	if err != nil {
+		return nil, err
+	}
+	userDetails.Password = ""
+
+	err = service.db.Insert(userDetails)
+	if err != nil {
+		return nil, err
+	}
+
+	// 创建客户端与用户之间的关系
+	err = service.db.Insert(&UserAuthority{
+		UserID:   userDetails.UserId,
+		ClientID: clientId,
+		Scope:    userDetails.Authorities,
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return userDetails, nil
 }

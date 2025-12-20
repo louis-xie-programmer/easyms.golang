@@ -23,4 +23,6 @@ var (
 	ErrInvalidTokenRequest = errors.New("invalid token")
 	// ErrExpiredToken                       令牌已过期错误
 	ErrExpiredToken = errors.New("token is expired")
+	// ErrInvalidScope                      权限错误
+	ErrInvalidScope = errors.New("invalid scope")
 )

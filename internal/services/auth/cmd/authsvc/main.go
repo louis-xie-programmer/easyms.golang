@@ -83,6 +83,9 @@ func main() {
 	// 检查appConfig是否为空
 	appConfig = config.GetAppConfig()
 
+	watch := config.NewConfigWatcher(discoveryClient, cfgStore.Consul.KeyPath, serverName, cfgStore.Env, provider.OnChange())
+	go watch.Start() // 配置热更新机制
+
 	// 初始化认证服务组件
 	// 初始化各种认证服务相关的组件
 	var tokenService service.TokenService
@@ -93,7 +96,10 @@ func main() {
 	var clientDetailsService service.ClientDetailsService
 
 	// 初始化JWT令牌增强器
-	tokenEnhancer = storage.NewJwtTokenEnhancer("secret")
+	// 支持密钥轮换：第一个是当前密钥，后续是旧密钥
+	tokenEnhancer = storage.NewJwtTokenEnhancer(
+		"new-super-secret-key-2024",
+	)
 
 	// 初始化数据库连接
 	// 根据配置连接到数据库
@@ -110,9 +116,6 @@ func main() {
 		logger.Error(err, "Failed to connect to database", serverName, nil)
 		panic(err)
 	}
-
-	// 初始化健康检查组件
-	healthChecker := service.NewHealthCheckerService(dbase)
 
 	// 尝试连接Redis
 	logger.Info(
@@ -140,9 +143,9 @@ func main() {
 			redisClient,
 		)
 	} else {
-		// Redis连接失败 - 降级到内存存储
+		// ToDo: Redis连接失败 - 降级到其他存储(这里可以按照业务需求选择合适的存储方式)
 		logger.Warn(
-			"Redis connection failed, falling back to in-memory storage",
+			"Redis connection failed, falling back to db storage",
 			serverName,
 			[][]string{
 				{"error", err.Error()},
@@ -169,6 +172,8 @@ func main() {
 	// 使用Gin框架启动HTTP服务
 	g := gin.Default()
 
+	// 初始化健康检查组件
+	healthChecker := service.NewHealthCheckerService(dbase)
 	// 健康检查端点
 	// 提供深度健康检查接口，验证关键依赖状态
 	g.GET("/health", func(c *gin.Context) {
@@ -193,6 +198,23 @@ func main() {
 
 	// 3. 通过用户授权令牌来获取刷新令牌，这里主要是通过用户授权令牌进行认证，生成新的访问令牌和刷新令牌，用户信息和客户端等信息存储在令牌中，从中间件中获取
 	g.POST("/oauth2/refresh", middleware.MakeAuthorityAuthorizationMiddleware(tokenService), handles.RefreshTokenEndpoint(tokenService))
+
+	g.POST("/oauth2/verify", handles.VerifyTokenEndpoint(tokenService))
+
+	g.POST("/client/register", handles.RegisterClientEndPoint(clientDetailsService))
+
+	g.POST("/user/register", middleware.MakeSimpleClientMiddleware(tokenService), handles.RegisterUserEndPoint(userDetailsService, []string{"admin"}))
+
+	// admin 接口，需要管理员权限才能访问（测试案例）
+	g.POST("/admin",
+		middleware.MakeAuthorityAuthorizationMiddleware(tokenService),
+		middleware.MakeScopeHandler("admin"),
+		func(ctx *gin.Context) {
+			ctx.JSON(200, gin.H{
+				"message": "Hello Admin!",
+			})
+		},
+	)
 
 	// 启动 HTTP 服务
 	// 监听指定端口提供服务

@@ -14,8 +14,9 @@ import (
 	"easyms/internal/shared/logger"
 	. "easyms/internal/shared/models"
 	"errors"
-	"github.com/golang-jwt/jwt"
 	"time"
+
+	"github.com/golang-jwt/jwt"
 )
 
 var (
@@ -73,7 +74,7 @@ func NewJwtTokenStore(jwtTokenEnhancer *JwtTokenEnhancer, db db.Database, redisC
 type JwtTokenStore struct {
 	jwtTokenEnhancer *JwtTokenEnhancer // JWT令牌增强器
 	db               db.Database       // 数据库实例（保留用于兼容）
-	redis            *db.EasyRedis        // Redis客户端，用于高性能令牌撤销
+	redis            *db.EasyRedis     // Redis客户端，用于高性能令牌撤销
 }
 
 // ReadAccessToken 根据令牌值获取访问令牌结构体
@@ -128,10 +129,10 @@ func (tokenStore *JwtTokenStore) RemoveAccessToken(tokenValue string) {
 	// 优先使用Redis
 	if tokenStore.redis != nil {
 		// 使用哈希值缩短存储键长度
-		hash := getTokenHash(tokenValue)
+		hash := getTokenHash(tokenValue) // 使用短哈希
 		oauth2Token, _, _ := tokenStore.jwtTokenEnhancer.Extract(tokenValue)
 		err := tokenStore.redis.SetEx(
-			fmt.Sprintf("token:access:%s", hash), 
+			fmt.Sprintf("revoked:access:%s", hash),
 			"revoked",
 			int(time.Until(*oauth2Token.ExpiresTime).Seconds()),
 		)
@@ -226,9 +227,8 @@ func (tokenStore *JwtTokenStore) IsAccessTokenRevoked(tokenValue string) (bool, 
 	// 优先使用Redis
 	if tokenStore.redis != nil {
 		hash := getTokenHash(tokenValue)
-		val, err := tokenStore.redis.GetCache(fmt.Sprintf("token:access:%s", hash))
-	return val != "" && err == nil, nil
-		return err == nil, err
+		val, err := tokenStore.redis.GetCache(fmt.Sprintf("revoked:access:%s", hash))
+		return val != "" && err == nil, nil
 	}
 
 	// 降级到数据库
@@ -360,6 +360,8 @@ func (enhancer *JwtTokenEnhancer) Extract(tokenValue string) (*OAuth2Token, *OAu
 				RefreshTokenValiditySeconds: claims.ClientDetails.RefreshTokenValiditySeconds,
 				RegisteredRedirectUri:       claims.ClientDetails.RegisteredRedirectUri,
 				AuthorizedGrantTypes:        claims.ClientDetails.AuthorizedGrantTypes,
+				AllowedAuthorities:          claims.ClientDetails.AllowedAuthorities,
+				DefaultAuthorities:          claims.ClientDetails.DefaultAuthorities,
 				// 不返回客户端密钥
 			},
 		}

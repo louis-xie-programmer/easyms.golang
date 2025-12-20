@@ -21,6 +21,7 @@ func (oauth2Token *OAuth2Token) IsExpired() bool {
 type OAuth2Details struct {
 	Client *ClientDetails
 	User   *UserDetails
+	Scopes string
 }
 
 // RevokedToken 令牌撤销记录模型

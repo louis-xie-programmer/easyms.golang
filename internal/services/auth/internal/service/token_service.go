@@ -34,6 +34,7 @@ func NewTokenService(tokenStore storage.TokenStore, tokenEnhancer storage.TokenE
 }
 
 func (tokenService *DefaultTokenService) CreateAccessToken(oauth2Details *OAuth2Details) (*OAuth2Token, error) {
+	// 生成刷新令牌
 	var refreshToken *OAuth2Token
 	refreshToken, err := tokenService.createRefreshToken(oauth2Details)
 	if err != nil {

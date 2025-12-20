@@ -3,8 +3,10 @@ package middleware
 import (
 	"easyms/internal/services/auth/internal/consts"
 	"easyms/internal/services/auth/internal/service"
-	"github.com/gin-gonic/gin"
+	model "easyms/internal/shared/models"
 	"net/http"
+
+	"github.com/gin-gonic/gin"
 )
 
 // MakeClientOnlyAuthorizationMiddleware 用于校验访问令牌是否为客户端凭证授权生成
@@ -67,6 +69,36 @@ func MakeAuthorityAuthorizationMiddleware(tokenService service.TokenService) gin
 			}
 		} else {
 			c.Set(consts.OAuth2ErrorKey, consts.ErrNullToken)
+		}
+
+		if err, ok := c.Value(consts.OAuth2ErrorKey).(error); ok {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		} else {
+			c.Next()
+		}
+	}
+}
+
+// MakeScopeHandler 用于校验访问令牌是否包含指定权限
+func MakeScopeHandler(scope string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// 从上一个基本中间中件获取用户详情
+		userDetails, ok := c.Value(consts.OAuth2UserDetailsKey).(*model.UserDetails)
+		if !ok || userDetails == nil {
+			c.Set(consts.OAuth2ErrorKey, consts.ErrInvalidUser)
+		} else {
+			// 检查用户是否具有所需权限
+			userScopes := userDetails.GetAuthorities()
+			isAllow := false
+			for _, s := range userScopes {
+				if s == scope {
+					isAllow = true
+					break
+				}
+			}
+			if !isAllow {
+				c.Set(consts.OAuth2ErrorKey, consts.ErrInvalidScope)
+			}
 		}
 
 		if err, ok := c.Value(consts.OAuth2ErrorKey).(error); ok {

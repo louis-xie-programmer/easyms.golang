@@ -16,8 +16,10 @@ type ClientDetails struct {
 	RegisteredRedirectUri string `gorm:"column:registered_redirect_uri;type:varchar(255)"`
 	// 可以使用的授权类型，多个类型用逗号分隔
 	AuthorizedGrantTypes string `gorm:"column:authorized_grant_types;type:varchar(255)"`
-	// 客户端权限，多个权限用逗号分隔
-	Authorities string `gorm:"column:authorities;type:varchar(255)"`
+	// 客户端运行的scope，多个scope用逗号分隔
+	AllowedAuthorities string `gorm:"column:allowed_scopes;type:varchar(255)"`
+	// 默认的scope，多个scope用逗号分隔
+	DefaultAuthorities string `gorm:"column:default_scope;type:varchar(255)"`
 }
 
 // TableName 设置ClientDetails模型对应的表名
@@ -40,13 +42,26 @@ func (c *ClientDetails) SetAuthorizedGrantTypes(types []string) {
 
 // GetAuthorities 获取权限列表
 func (c *ClientDetails) GetAuthorities() []string {
-	if c.Authorities == "" {
+	if c.DefaultAuthorities == "" {
 		return []string{}
 	}
-	return strings.Split(c.Authorities, ",")
+	return strings.Split(c.DefaultAuthorities, ",")
 }
 
 // SetAuthorities 设置权限列表
 func (c *ClientDetails) SetAuthorities(authorities []string) {
-	c.Authorities = strings.Join(authorities, ",")
+	c.DefaultAuthorities = strings.Join(authorities, ",")
+}
+
+// GetAllowedScopes 获取允许的scope列表
+func (c *ClientDetails) GetAllowedScopes() []string {
+	if c.AllowedAuthorities == "" {
+		return []string{}
+	}
+	return strings.Split(c.AllowedAuthorities, ",")
+}
+
+// SetAllowedScopes 设置允许的scope列表
+func (c *ClientDetails) SetAllowedScopes(scopes []string) {
+	c.AllowedAuthorities = strings.Join(scopes, ",")
 }

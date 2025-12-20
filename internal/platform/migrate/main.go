@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"easyms/internal/shared/db"
+
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
@@ -34,7 +35,7 @@ func main() {
 	// -down: 执行向下迁移操作
 	// -auto: 使用GORM AutoMigrate自动创建表结构
 	flag.StringVar(&migrationsPath, "path", "./migrations", "migrations path")
-	flag.StringVar(&dbURL, "database", "", "database url")
+	flag.StringVar(&dbURL, "db", "", "database url")
 	flag.BoolVar(&up, "up", false, "apply all up migrations")
 	flag.BoolVar(&down, "down", false, "apply all down migrations")
 	flag.BoolVar(&auto, "auto", false, "use GORM AutoMigrate to create tables")
@@ -72,6 +73,7 @@ func main() {
 			&ClientDetails{},
 			&UserDetails{},
 			&RevokedToken{},
+			&UserAuthority{},
 		}
 
 		err = database.AutoMigrate(models...)
@@ -90,6 +92,7 @@ func main() {
 		// 创建测试用户和客户端(并保存到数据库)
 		createTestUsers(database)
 		createTestClients(database)
+		createTestUserAuthorities(database)
 
 		return
 	}
@@ -184,7 +187,18 @@ func createTestClients(dbase db.Database) map[string]*ClientDetails {
 			RefreshTokenValiditySeconds: 7200,
 			RegisteredRedirectUri:       "http://localhost:10002/callback",
 			AuthorizedGrantTypes:        "password,refresh_token",
-			Authorities:                 "USER",
+			AllowedAuthorities:          "USER,ADMIN",
+			DefaultAuthorities:          "USER",
+		},
+		"payment-svc": {
+			ClientId:                    "payment-svc",
+			ClientSecret:                "payment_secret",
+			AccessTokenValiditySeconds:  3600,
+			RefreshTokenValiditySeconds: 7200,
+			RegisteredRedirectUri:       "http://localhost:10002/callback",
+			AuthorizedGrantTypes:        "password,refresh_token",
+			AllowedAuthorities:          "USER,ADMIN",
+			DefaultAuthorities:          "USER",
 		},
 	}
 
@@ -206,4 +220,34 @@ func createTestClients(dbase db.Database) map[string]*ClientDetails {
 	}
 
 	return clients
+}
+
+func createTestUserAuthorities(dbase db.Database) {
+	authorities := []UserAuthority{
+		{
+			UserID:   1,
+			ClientID: "user-svc",
+			Scope:    "user",
+		},
+		{
+			UserID:   1,
+			ClientID: "payment-svc",
+			Scope:    "admin",
+		},
+		{
+			UserID:   2,
+			ClientID: "payment-svc",
+			Scope:    "user",
+		},
+		{
+			UserID:   2,
+			ClientID: "user-svc",
+			Scope:    "admin",
+		},
+	}
+
+	for _, authority := range authorities {
+		dbase.Insert(&authority)
+	}
+
 }
