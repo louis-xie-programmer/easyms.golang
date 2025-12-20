@@ -18,7 +18,7 @@ import (
 // EasyRedis Redis客户端封装
 // 对redis-go客户端进行封装，提供更便捷的操作接口
 type EasyRedis struct {
-	redis *redis.Client  // Redis客户端实例
+	redis *redis.Client // Redis客户端实例
 }
 
 // NewEasyRedis 创建新的Redis客户端
@@ -34,9 +34,9 @@ func NewEasyRedis(address *string, password *string, dbNum *int) (*EasyRedis, er
 	// 创建Redis客户端配置
 	// 配置Redis服务器地址、密码和数据库编号
 	redis := redis.NewClient(&redis.Options{
-		Addr:     *address,  // Redis服务器地址
-		Password: *password, // 密码（如果有的话）
-		DB:       *dbNum,    // 使用的数据库编号
+		Addr:       *address,  // Redis服务器地址
+		Password:   *password, // 密码（如果有的话）
+		DB:         *dbNum,    // 使用的数据库编号
 		MaxRetries: 3,         // 最大重试次数
 	})
 
@@ -45,7 +45,7 @@ func NewEasyRedis(address *string, password *string, dbNum *int) (*EasyRedis, er
 	if redis.Ping(context.Background()).Err() != nil {
 		return nil, redis.Ping(context.Background()).Err()
 	}
-	
+
 	return &EasyRedis{redis: redis}, nil
 }
 
@@ -75,7 +75,7 @@ func (r *EasyRedis) SetCache(key string, value interface{}) error {
 	if err != nil {
 		return err
 	}
-	
+
 	// 设置缓存，永不过期
 	return r.redis.Set(ctx, key, val, 0).Err()
 }
@@ -88,7 +88,7 @@ func (r *EasyRedis) SetCache(key string, value interface{}) error {
 //   - error: 操作成功返回nil，失败返回具体错误
 func (r *EasyRedis) SetHashCache(key string, values map[string]interface{}) error {
 	ctx := context.Background()
-	
+
 	// 如果键已存在，先删除
 	if r.ExistsKey(key) {
 		err := r.redis.Del(ctx, key).Err()
@@ -96,7 +96,7 @@ func (r *EasyRedis) SetHashCache(key string, values map[string]interface{}) erro
 			return err
 		}
 	}
-	
+
 	// 设置hash值
 	return r.redis.HSet(ctx, key, values).Err()
 }
@@ -108,7 +108,7 @@ func (r *EasyRedis) SetHashCache(key string, values map[string]interface{}) erro
 //   - error: 操作成功返回nil，失败返回具体错误
 func (r *EasyRedis) RemoveParentKeyCache(parentKeyPattern string) error {
 	ctx := context.Background()
-	
+
 	// 扫描匹配的键
 	iter := r.redis.Scan(ctx, 0, parentKeyPattern, 0).Iterator()
 	for iter.Next(ctx) {
@@ -118,7 +118,7 @@ func (r *EasyRedis) RemoveParentKeyCache(parentKeyPattern string) error {
 			return err
 		}
 	}
-	
+
 	return nil
 }
 
@@ -180,7 +180,7 @@ func (r *EasyRedis) SetHashSetCache(key string, value interface{}) error {
 	if err != nil {
 		return err
 	}
-	
+
 	return nil
 }
 
@@ -198,6 +198,54 @@ func (r *EasyRedis) GetHashSetCache(key string, field string) ([]string, error) 
 		return nil, err
 	}
 	return vals, nil
+}
+
+// ZAdd 向有序集合添加成员
+func (r *EasyRedis) ZAdd(key string, members ...redis.Z) error {
+	ctx := context.Background()
+	return r.redis.ZAdd(ctx, key, members...).Err()
+}
+
+// ZRange 获取有序集合指定范围的成员
+func (r *EasyRedis) ZRange(key string, start, stop int64) ([]string, error) {
+	ctx := context.Background()
+	return r.redis.ZRange(ctx, key, start, stop).Result()
+}
+
+// ZRevRange 获取有序集合指定范围的成员（按分数从高到低）
+func (r *EasyRedis) ZRevRange(key string, start, stop int64) ([]string, error) {
+	ctx := context.Background()
+	return r.redis.ZRevRange(ctx, key, start, stop).Result()
+}
+
+// ZScore 获取有序集合成员的分数
+func (r *EasyRedis) ZScore(key, member string) (float64, error) {
+	ctx := context.Background()
+	return r.redis.ZScore(ctx, key, member).Result()
+}
+
+// ZRank 获取有序集合成员的排名
+func (r *EasyRedis) ZRank(key, member string) (int64, error) {
+	ctx := context.Background()
+	return r.redis.ZRank(ctx, key, member).Result()
+}
+
+// PFAdd 添加元素到 HyperLogLog
+func (r *EasyRedis) PFAdd(key string, els ...interface{}) error {
+	ctx := context.Background()
+	return r.redis.PFAdd(ctx, key, els...).Err()
+}
+
+// PFCount 获取 HyperLogLog 的基数估算值
+func (r *EasyRedis) PFCount(keys ...string) (int64, error) {
+	ctx := context.Background()
+	return r.redis.PFCount(ctx, keys...).Result()
+}
+
+// PFMerge 将多个 HyperLogLog 合并为一个
+func (r *EasyRedis) PFMerge(dest string, keys ...string) error {
+	ctx := context.Background()
+	return r.redis.PFMerge(ctx, dest, keys...).Err()
 }
 
 // GetCacheWithProtection 带防护机制的缓存获取方法
@@ -224,14 +272,14 @@ func (r *EasyRedis) GetCacheWithProtection(key string, nullCacheExpire, mutexExp
 		if val == "NULL_CACHE_PLACEHOLDER" {
 			return nil, nil // 返回空值，表示数据源中也不存在
 		}
-		
+
 		// 反序列化缓存值
 		// 将JSON格式的缓存值反序列化为Go对象
 		var result interface{}
 		if err := json.Unmarshal([]byte(val), &result); err != nil {
 			return nil, err
 		}
-		
+
 		return result, nil
 	}
 
@@ -315,6 +363,26 @@ func (r *EasyRedis) releaseLock(key string) error {
 		end
 	`
 	return r.redis.Eval(ctx, script, []string{key}, "1").Err()
+}
+
+// Pipeline 创建一个 Redis Pipeline
+func (r *EasyRedis) Pipeline() redis.Pipeliner {
+	return r.redis.Pipeline()
+}
+
+// TxPipeline 创建一个支持事务的 Redis Pipeline
+func (r *EasyRedis) TxPipeline() redis.Pipeliner {
+	return r.redis.TxPipeline()
+}
+
+// Subscribe 订阅频道
+func (r *EasyRedis) Subscribe(ctx context.Context, channels ...string) *redis.PubSub {
+	return r.redis.Subscribe(ctx, channels...)
+}
+
+// Publish 发布消息到频道
+func (r *EasyRedis) Publish(ctx context.Context, channel string, message interface{}) error {
+	return r.redis.Publish(ctx, channel, message).Err()
 }
 
 func (r *EasyRedis) SetEx(key string, value interface{}, expireSeconds int) error {

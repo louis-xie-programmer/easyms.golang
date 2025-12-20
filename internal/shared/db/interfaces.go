@@ -39,4 +39,7 @@ type Database interface {
 
 	// GetType 获取数据库类型
 	GetType() string
+
+	// Begin 开启事务
+	Begin() (TxTransaction, error)
 }

@@ -32,7 +32,7 @@ type EasyDatabase struct {
 	DBType string   // 数据库类型
 }
 
-// 确保EasyDatabase实现了DatabaseInterface接口
+// 确保EasyDatabase实现了Database接口
 var _ Database = &EasyDatabase{}
 
 // AutoMigrate 自动迁移数据库表结构
@@ -96,6 +96,15 @@ func (ed *EasyDatabase) GetDB() *gorm.DB {
 // GetType 获取数据库类型
 func (ed *EasyDatabase) GetType() string {
 	return ed.DBType
+}
+
+// Begin 开启事务
+func (ed *EasyDatabase) Begin() (TxTransaction, error) {
+	tx := ed.DB.Begin()
+	if tx.Error != nil {
+		return nil, tx.Error
+	}
+	return &GormTransaction{DB: tx}, nil
 }
 
 // NewEasyDatabase 创建新的数据库实例

@@ -14,7 +14,7 @@ type PostgresDatabase struct {
 }
 
 // NewPostgresDatabase 创建PostgreSQL数据库实例
-// 确保PostgresDatabase实现了DatabaseInterface接口
+// 确保PostgresDatabase实现了Database接口
 var _ Database = &PostgresDatabase{}
 
 func NewPostgresDatabase(db *gorm.DB) *PostgresDatabase {
@@ -282,6 +282,15 @@ func (pd *PostgresDatabase) Query(dest interface{}, query string, args ...interf
 	}
 
 	return pd.DB.Raw(query, args...).Scan(dest).Error
+}
+
+// Begin 开启事务
+func (pd *PostgresDatabase) Begin() (TxTransaction, error) {
+	tx := pd.DB.Begin()
+	if tx.Error != nil {
+		return nil, tx.Error
+	}
+	return &GormTransaction{DB: tx}, nil
 }
 
 // GetDB 获取底层的GORM数据库实例
