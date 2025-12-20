@@ -29,6 +29,7 @@ func NewDatabaseFactory() DatabaseFactory {
 // 参数:
 //   - dbType: 数据库类型（mysql/postgres/sqlserver）
 //   - connStr: 数据库连接字符串
+//
 // 返回值:
 //   - Database: 数据库实例
 //   - error: 操作成功返回nil，失败返回具体错误
@@ -49,7 +50,7 @@ func (f *DefaultDatabaseFactory) CreateDatabase(dbType string, connStr string) (
 
 	// 为 PostgreSQL 配置更好的数组支持
 	config := &gorm.Config{
-		SkipDefaultTransaction: true,
+		SkipDefaultTransaction:                   true,
 		DisableForeignKeyConstraintWhenMigrating: true,
 	}
 
@@ -74,6 +75,7 @@ func (f *DefaultDatabaseFactory) CreateDatabase(dbType string, connStr string) (
 //   - dbType: 数据库类型（mysql/postgres/sqlserver）
 //   - connStr: 数据库连接字符串
 //   - cfg: 连接池配置
+//
 // 返回值:
 //   - Database: 数据库实例
 //   - error: 操作成功返回nil，失败返回具体错误
@@ -94,7 +96,7 @@ func (f *DefaultDatabaseFactory) CreateDatabaseWithPool(dbType string, connStr s
 
 	// 为 PostgreSQL 配置更好的数组支持
 	config := &gorm.Config{
-		SkipDefaultTransaction: true,
+		SkipDefaultTransaction:                   true,
 		DisableForeignKeyConstraintWhenMigrating: true,
 	}
 
@@ -120,19 +122,19 @@ func (f *DefaultDatabaseFactory) CreateDatabaseWithPool(dbType string, connStr s
 			if maxIdleConns, ok := v["max_idle_conns"].(int); ok && maxIdleConns > 0 {
 				sqlDB.SetMaxIdleConns(maxIdleConns)
 			}
-			
+
 			// 设置最大打开连接数
 			// 控制数据库连接的最大数量
 			if maxOpenConns, ok := v["max_open_conns"].(int); ok && maxOpenConns > 0 {
 				sqlDB.SetMaxOpenConns(maxOpenConns)
 			}
-			
+
 			// 设置连接最大生命周期
 			// 控制连接可以被复用的最大时间
 			if connMaxLifetime, ok := v["conn_max_lifetime"].(int); ok && connMaxLifetime > 0 {
 				sqlDB.SetConnMaxLifetime(time.Duration(connMaxLifetime) * time.Second)
 			}
-			
+
 			// 设置连接最大空闲时间
 			// 控制连接在池中保持空闲的最大时间
 			if connMaxIdleTime, ok := v["conn_max_idle_time"].(int); ok && connMaxIdleTime > 0 {
