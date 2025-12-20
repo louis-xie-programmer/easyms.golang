@@ -64,6 +64,8 @@ func (f *DefaultDatabaseFactory) CreateDatabase(dbType string, connStr string) (
 	switch dbType {
 	case "postgres":
 		return NewPostgresDatabase(db), nil
+	case "mysql":
+		return NewMysqlDatabase(db), nil
 	default:
 		return &EasyDatabase{DB: db, DBType: dbType}, nil
 	}
@@ -161,6 +163,8 @@ func (f *DefaultDatabaseFactory) CreateDatabaseWithPool(dbType string, connStr s
 	switch dbType {
 	case "postgres":
 		return NewPostgresDatabase(db), nil
+	case "mysql":
+		return NewMysqlDatabase(db), nil
 	default:
 		return &EasyDatabase{DB: db, DBType: dbType}, nil
 	}
