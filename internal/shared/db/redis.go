@@ -27,6 +27,7 @@ type EasyRedis struct {
 //   - address: Redis服务器地址
 //   - password: Redis密码
 //   - dbNum: 数据库编号
+//
 // 返回值:
 //   - *EasyRedis: Redis客户端实例
 //   - error: 操作成功返回nil，失败返回具体错误
@@ -53,6 +54,7 @@ func NewEasyRedis(address *string, password *string, dbNum *int) (*EasyRedis, er
 // 使用Redis EXISTS命令检查指定键是否存在
 // 参数:
 //   - key: 键名
+//
 // 返回值:
 //   - bool: 存在返回true，否则返回false
 func (r *EasyRedis) ExistsKey(key string) bool {
@@ -66,6 +68,7 @@ func (r *EasyRedis) ExistsKey(key string) bool {
 // 参数:
 //   - key: 键名
 //   - value: 键值
+//
 // 返回值:
 //   - error: 操作成功返回nil，失败返回具体错误
 func (r *EasyRedis) SetCache(key string, value interface{}) error {
@@ -84,6 +87,7 @@ func (r *EasyRedis) SetCache(key string, value interface{}) error {
 // 参数:
 //   - key: 键名
 //   - values: 键值对映射
+//
 // 返回值:
 //   - error: 操作成功返回nil，失败返回具体错误
 func (r *EasyRedis) SetHashCache(key string, values map[string]interface{}) error {
@@ -104,6 +108,7 @@ func (r *EasyRedis) SetHashCache(key string, values map[string]interface{}) erro
 // RemoveParentKeyCache 删除父键中的所有子键
 // 参数:
 //   - parentKeyPattern: 父键模式
+//
 // 返回值:
 //   - error: 操作成功返回nil，失败返回具体错误
 func (r *EasyRedis) RemoveParentKeyCache(parentKeyPattern string) error {
@@ -125,6 +130,7 @@ func (r *EasyRedis) RemoveParentKeyCache(parentKeyPattern string) error {
 // RemoveKeyCache 删除指定键
 // 参数:
 //   - key: 键名
+//
 // 返回值:
 //   - error: 操作成功返回nil，失败返回具体错误
 func (r *EasyRedis) RemoveKeyCache(key string) error {
@@ -136,6 +142,7 @@ func (r *EasyRedis) RemoveKeyCache(key string) error {
 // 从Redis中获取指定键的值
 // 参数:
 //   - key: 键名
+//
 // 返回值:
 //   - string: 键值
 //   - error: 操作成功返回nil，失败返回具体错误
@@ -148,6 +155,7 @@ func (r *EasyRedis) GetCache(key string) (string, error) {
 // 参数:
 //   - key: 键名
 //   - field: 字段名
+//
 // 返回值:
 //   - map[string]string: hash值映射
 //   - error: 操作成功返回nil，失败返回具体错误
@@ -164,6 +172,7 @@ func (r *EasyRedis) GetHashCache(key string, field string) (map[string]string, e
 // 参数:
 //   - key: 键名
 //   - value: 要插入的值
+//
 // 返回值:
 //   - error: 操作成功返回nil，失败返回具体错误
 func (r *EasyRedis) SetHashSetCache(key string, value interface{}) error {
@@ -188,6 +197,7 @@ func (r *EasyRedis) SetHashSetCache(key string, value interface{}) error {
 // 参数:
 //   - key: 键名
 //   - field: 字段名
+//
 // 返回值:
 //   - []string: 集合中的所有值
 //   - error: 操作成功返回nil，失败返回具体错误
@@ -256,10 +266,23 @@ func (r *EasyRedis) PFMerge(dest string, keys ...string) error {
 //   - nullCacheExpire: 空值缓存过期时间（秒）
 //   - mutexExpire: 互斥锁过期时间（秒）
 //   - fallback: 回退函数，用于从数据源获取数据
+//
 // 返回值:
 //   - interface{}: 缓存值或数据源返回的值
 //   - error: 操作成功返回nil，失败返回具体错误
 func (r *EasyRedis) GetCacheWithProtection(key string, nullCacheExpire, mutexExpire int, fallback func() (interface{}, error)) (interface{}, error) {
+	return r.getCacheWithProtection(key, nullCacheExpire, mutexExpire, fallback, 0)
+}
+
+// getCacheWithProtection 带防护机制的缓存获取方法（内部递归版本）
+// retries: 重试次数
+func (r *EasyRedis) getCacheWithProtection(key string, nullCacheExpire, mutexExpire int, fallback func() (interface{}, error), retries int) (interface{}, error) {
+	// 限制重试次数，防止无限递归
+	const maxRetries = 3
+	if retries >= maxRetries {
+		return fallback()
+	}
+
 	ctx := context.Background()
 
 	// 1. 尝试从缓存获取
@@ -296,7 +319,7 @@ func (r *EasyRedis) GetCacheWithProtection(key string, nullCacheExpire, mutexExp
 		// 未获取到锁，短暂等待后重试
 		// 随机等待一段时间后重试，减轻并发压力
 		time.Sleep(time.Millisecond * time.Duration(10+rand.Intn(100)))
-		return r.GetCacheWithProtection(key, nullCacheExpire, mutexExpire, fallback)
+		return r.getCacheWithProtection(key, nullCacheExpire, mutexExpire, fallback, retries+1)
 	}
 
 	// 3. 获取到锁，查询数据源
@@ -334,6 +357,7 @@ func (r *EasyRedis) GetCacheWithProtection(key string, nullCacheExpire, mutexExp
 // 参数:
 //   - key: 锁键名
 //   - expireSeconds: 锁过期时间（秒）
+//
 // 返回值:
 //   - bool: 获取锁成功返回true，否则返回false
 //   - error: 操作成功返回nil，失败返回具体错误
@@ -350,6 +374,7 @@ func (r *EasyRedis) acquireLock(key string, expireSeconds int) (bool, error) {
 // releaseLock 释放分布式锁
 // 参数:
 //   - key: 锁键名
+//
 // 返回值:
 //   - error: 操作成功返回nil，失败返回具体错误
 func (r *EasyRedis) releaseLock(key string) error {

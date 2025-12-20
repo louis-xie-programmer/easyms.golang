@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // MysqlDatabase MySQL数据库实现
@@ -62,13 +63,8 @@ func (md *MysqlDatabase) AutoMigrate(models ...interface{}) error {
 // Insert 插入数据（MySQL特有实现）
 func (md *MysqlDatabase) Insert(value interface{}) error {
 	// MySQL特定的插入逻辑
-	// 使用 Session 创建一个新会话
-	session := md.DB.Session(&gorm.Session{
-		// MySQL支持的特定选项
-	})
-
 	// 执行插入操作
-	return session.Create(value).Error
+	return md.DB.Create(value).Error
 }
 
 // convertJsonFields 自动处理结构体中的JSON字段
@@ -118,9 +114,18 @@ func (md *MysqlDatabase) Query(dest interface{}, query string, args ...interface
 
 // Upsert MySQL特有功能：插入或更新（ON DUPLICATE KEY UPDATE）
 func (md *MysqlDatabase) Upsert(value interface{}, updateColumns ...string) error {
-	// 这里简化实现，实际应用中可以根据需要扩展
-	// 使用GORM的Clauses来实现Upsert功能
-	return md.DB.Clauses().Create(value).Error
+	// 构建ON DUPLICATE KEY UPDATE子句
+	if len(updateColumns) == 0 {
+		// 如果没有指定更新列，默认更新所有列
+		return md.DB.Clauses(clause.OnConflict{UpdateAll: true}).Create(value).Error
+	} else {
+		// 构造要更新的列
+		updates := make(map[string]interface{})
+		for _, col := range updateColumns {
+			updates[col] = gorm.Expr(col) // 使用表达式引用原有值
+		}
+		return md.DB.Clauses(clause.OnConflict{DoUpdates: clause.Assignments(updates)}).Create(value).Error
+	}
 }
 
 // GetDB 获取底层的GORM数据库实例

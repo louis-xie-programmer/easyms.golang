@@ -42,11 +42,8 @@ func (ed *EasyDatabase) AutoMigrate(models ...interface{}) error {
 
 // Insert 插入数据
 func (ed *EasyDatabase) Insert(value interface{}) error {
-	// 使用 Session 创建一个新会话
-	session := ed.DB.Session(&gorm.Session{})
-
 	// 执行插入操作
-	return session.Create(value).Error
+	return ed.DB.Create(value).Error
 }
 
 // Query 查询数据（可传 model + 条件）
