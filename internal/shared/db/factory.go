@@ -16,6 +16,12 @@ type DatabaseFactory interface {
 	CreateDatabaseWithPool(dbType string, connStr string, cfg interface{}) (Database, error)
 }
 
+// ReadWriteSplitConfig 读写分离配置
+type ReadWriteSplitConfig struct {
+	Master   DatabaseConfig   // 主库配置
+	Replicas []DatabaseConfig // 从库配置列表
+}
+
 // DefaultDatabaseFactory 默认数据库工厂实现
 type DefaultDatabaseFactory struct{}
 
@@ -167,5 +173,88 @@ func (f *DefaultDatabaseFactory) CreateDatabaseWithPool(dbType string, connStr s
 		return NewMysqlDatabase(db), nil
 	default:
 		return &EasyDatabase{DB: db, DBType: dbType}, nil
+	}
+}
+
+// CreateReadWriteSplitDatabase 创建支持读写分离的数据库实例
+func (f *DefaultDatabaseFactory) CreateReadWriteSplitDatabase(config ReadWriteSplitConfig) (Database, error) {
+	// 创建主库连接
+	master, err := f.createSingleDatabase(config.Master)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create master database: %w", err)
+	}
+
+	// 创建从库连接
+	var replicas []*gorm.DB
+	for i, replicaConfig := range config.Replicas {
+		replica, err := f.createSingleDatabase(replicaConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create replica database #%d: %w", i, err)
+		}
+		replicas = append(replicas, replica.GetDB())
+	}
+
+	return NewReadWriteSplitDatabase(master.GetDB(), replicas), nil
+}
+
+// createSingleDatabase 创建单个数据库连接
+func (f *DefaultDatabaseFactory) createSingleDatabase(config DatabaseConfig) (Database, error) {
+	var dialector gorm.Dialector
+	connStr := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local",
+		config.UserName, config.Password, config.Host, config.Port, config.Database)
+
+	// 根据数据库类型选择对应的驱动
+	switch config.Type {
+	case "mysql":
+		dialector = mysql.Open(connStr)
+	case "postgres":
+		dialector = postgres.Open(connStr)
+	case "sqlserver":
+		dialector = sqlserver.Open(connStr)
+	default:
+		return nil, fmt.Errorf("unsupported database type: %s", config.Type)
+	}
+
+	// 配置
+	gormConfig := &gorm.Config{
+		SkipDefaultTransaction:                   true,
+		DisableForeignKeyConstraintWhenMigrating: true,
+	}
+
+	// 创建数据库连接
+	gormDB, err := gorm.Open(dialector, gormConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	// 配置连接池
+	if config.MaxIdleConns > 0 || config.MaxOpenConns > 0 || config.ConnMaxLifetime > 0 || config.ConnMaxIdleTime > 0 {
+		sqlDB, err := gormDB.DB()
+		if err != nil {
+			return nil, err
+		}
+
+		if config.MaxIdleConns > 0 {
+			sqlDB.SetMaxIdleConns(config.MaxIdleConns)
+		}
+		if config.MaxOpenConns > 0 {
+			sqlDB.SetMaxOpenConns(config.MaxOpenConns)
+		}
+		if config.ConnMaxLifetime > 0 {
+			sqlDB.SetConnMaxLifetime(time.Duration(config.ConnMaxLifetime) * time.Second)
+		}
+		if config.ConnMaxIdleTime > 0 {
+			sqlDB.SetConnMaxIdleTime(time.Duration(config.ConnMaxIdleTime) * time.Second)
+		}
+	}
+
+	// 根据数据库类型返回相应的实现
+	switch config.Type {
+	case "postgres":
+		return NewPostgresDatabase(gormDB), nil
+	case "mysql":
+		return NewMysqlDatabase(gormDB), nil
+	default:
+		return &EasyDatabase{DB: gormDB, DBType: config.Type}, nil
 	}
 }
