@@ -42,4 +42,7 @@ type Database interface {
 
 	// Begin 开启事务
 	Begin() (TxTransaction, error)
+
+	// RunInTransaction 在事务中执行操作
+	RunInTransaction(fn func(tx TxTransaction) error) error
 }

@@ -14,34 +14,45 @@ package logger
 import (
 	"context"
 	"easyms/internal/shared/entities"
-	"fmt"
 	"math/rand"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/rs/zerolog"
 )
 
-// Logger 定义日志记录器接口
-// 所有具体的日志实现都需要实现此接口
-type Logger interface {
-	Log(logs []LogEntry) error // 批量记录日志条目
+// BackendLogger 定义日志后端接口
+type BackendLogger interface {
+	Log(logs []*LogEntry) error // 批量记录日志条目
 }
 
-var loggerImpl Logger        // 全局日志实现
-var defaultService string    // 默认服务名称
-var minLogLevel string       // 最小日志级别
-var sampleRate float64 = 1.0 // 采样率，默认1.0表示100%记录
+var (
+	loggerImpl     BackendLogger        // 全局日志实现
+	defaultService string               // 默认服务名称
+	minLogLevel    string               // 最小日志级别
+	sampleRate     float64        = 1.0 // 采样率，默认1.0表示100%记录
+	fallbackLogger zerolog.Logger       // 备用日志记录器
+	rootLogger     *Logger              // 全局根日志记录器
+)
 
 // 全局日志通道和管理器
 var (
-	logChan        = make(chan LogEntry, 1000) // 日志处理通道，缓冲区大小为1000
-	closeChan      = make(chan struct{})       // 关闭通知通道
-	wg             sync.WaitGroup              // worker管理器，用于等待所有日志处理完成
-	logChanFull    = false                     // 标记日志通道是否已满
-	logChanFullMtx sync.RWMutex                // 保护logChanFull的读写锁
+	logPool = sync.Pool{
+		New: func() interface{} {
+			return &LogEntry{
+				Fields: make(map[string]interface{}),
+			}
+		},
+	}
+	logChan        = make(chan *LogEntry, 1000) // 日志处理通道，缓冲区大小为1000
+	closeChan      = make(chan struct{})        // 关闭通知通道
+	wg             sync.WaitGroup               // worker管理器，用于等待所有日志处理完成
+	logChanFull    = false                      // 标记日志通道是否已满
+	logChanFullMtx sync.RWMutex                 // 保护logChanFull的读写锁
 )
 
 // Prometheus metrics
@@ -52,6 +63,14 @@ var (
 			Help: "Total number of log entries processed",
 		},
 		[]string{"level", "service"},
+	)
+
+	logDroppedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "log_dropped_total",
+			Help: "Total number of log entries dropped due to full channel",
+		},
+		[]string{"service"},
 	)
 
 	logLatency = promauto.NewHistogramVec(
@@ -85,6 +104,11 @@ var (
 	)
 )
 
+// Logger 是上下文感知的日志记录器
+type Logger struct {
+	fields map[string]interface{}
+}
+
 func shouldLog(level string) bool {
 	return strings.Compare(level, minLogLevel) >= 0
 }
@@ -106,19 +130,8 @@ func SetSampleRate(rate float64) {
 }
 
 // Init 初始化日志系统
-// 初始化日志系统，包括设置服务名称、日志级别和日志实现
-// 同时启动后台日志处理协程
-// 参数:
-//
-//	service: 服务名称，用于标识日志来源
-//	cfg:     应用配置指针，包含日志级别和类型配置
-//
-// 初始化流程：
-// 1. 设置全局服务名称和日志级别
-// 2. 根据配置创建对应的日志实现
-// 3. 启动日志处理协程
 func Init(service string, cfg *entities.AppConfig) {
-	// 初始化全局服务名称和日志级别
+	fallbackLogger = zerolog.New(os.Stderr).With().Timestamp().Str("service", service).Str("module", "logger_fallback").Logger()
 	defaultService = service
 	if cfg != nil && cfg.Log != (entities.LogConfig{}) {
 		minLogLevel = strings.ToLower(cfg.Log.LogLevel)
@@ -126,263 +139,227 @@ func Init(service string, cfg *entities.AppConfig) {
 		minLogLevel = "info"
 	}
 
-	// 根据配置创建不同的日志实现
 	if cfg != nil && cfg.Log != (entities.LogConfig{}) {
 		switch strings.ToLower(cfg.Log.LogType) {
 		case "loki":
-			// 使用Loki日志系统
 			loggerImpl = NewLokiLogger(service, cfg.Loki)
 		default:
-			// 默认使用Zerolog日志系统
 			loggerImpl = NewZerologLogger(service, minLogLevel)
 		}
 	} else {
-		// 使用默认日志实现
 		loggerImpl = NewZerologLogger(service, minLogLevel)
 	}
 
-	// 初始化监控指标
+	rootLogger = &Logger{fields: make(map[string]interface{})}
 	logChannelCapacity.Set(float64(cap(logChan)))
-
-	// 启动日志处理worker协程
 	wg.Add(1)
 	go logProcessor()
 }
 
-// logProcessor 处理日志的异步处理器
-// 功能：从通道接收日志条目，批量写入持久化存储
-// 参数：无
-// 返回值：无
-// 协程安全：通过waitGroup同步
 func logProcessor() {
-	// 注册协程退出通知
 	defer wg.Done()
-
-	// 初始化日志缓冲区和定时器（5秒刷新间隔）
-	var logs []LogEntry
+	var logs []*LogEntry
 	ticker := time.NewTicker(5 * time.Second)
-	monitorTicker := time.NewTicker(30 * time.Second) // 每30秒监控一次
+	monitorTicker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	defer monitorTicker.Stop()
 
 	for {
-		// 核心处理循环：
-		// 1. 累积日志条目
-		// 2. 定时/容量触发写入
-		// 3. 处理关闭信号
 		select {
-		// 接收日志条目
 		case entry := <-logChan:
-			// 从上下文中提取额外信息
 			if entry.Context != nil {
-				// 提取trace_id（如果存在）
 				if traceID := entry.Context.Value("trace_id"); traceID != nil {
-					entry.Extra = append(entry.Extra, []string{"trace_id", fmt.Sprintf("%v", traceID)})
+					entry.Fields["trace_id"] = traceID
 				}
-
-				// 提取request_id（如果存在）
 				if requestID := entry.Context.Value("request_id"); requestID != nil {
-					entry.Extra = append(entry.Extra, []string{"request_id", fmt.Sprintf("%v", requestID)})
+					entry.Fields["request_id"] = requestID
 				}
 			}
 
-			// 根据采样率决定是否记录该日志
 			if !shouldSample() {
-				// 增加采样统计
 				logSampledTotal.WithLabelValues(entry.Level, entry.Service).Inc()
+				logPool.Put(entry)
 				continue
 			}
 
 			logs = append(logs, entry)
-			// 更新监控指标
 			logChannelUsage.Set(float64(len(logChan)))
 
-			// 达到批量容量时写入
-			// 批量处理提高性能，减少I/O操作
 			if len(logs) >= 10 {
-				startTime := time.Now()
-				err := loggerImpl.Log(logs)
-				logLatency.WithLabelValues("batch").Observe(time.Since(startTime).Seconds())
-
-				if err != nil {
-					fmt.Println("Failed to log:", err)
-				}
-
-				// 增加指标统计
-				for _, logEntry := range logs {
-					logEntriesTotal.WithLabelValues(logEntry.Level, logEntry.Service).Inc()
-				}
-
+				flushLogs(logs)
 				logs = nil
 			}
-		case <-ticker.C: // 定时触发写入
-			// 定时刷新确保日志及时写入，避免数据丢失
+		case <-ticker.C:
 			if len(logs) > 0 {
-				startTime := time.Now()
-				err := loggerImpl.Log(logs)
-				logLatency.WithLabelValues("timer").Observe(time.Since(startTime).Seconds())
-
-				if err != nil {
-					fmt.Println("Failed to log:", err)
-				}
-
-				// 增加指标统计
-				for _, logEntry := range logs {
-					logEntriesTotal.WithLabelValues(logEntry.Level, logEntry.Service).Inc()
-				}
-
+				flushLogs(logs)
 				logs = nil
 			}
 		case <-monitorTicker.C:
-			// 定期报告日志系统状态
 			usage := len(logChan)
 			capacity := cap(logChan)
 			usagePercent := float64(usage) / float64(capacity) * 100
-
-			// 如果使用率超过80%，标记为已满并发出警告
 			logChanFullMtx.Lock()
-			if usagePercent > 80 {
-				logChanFull = true
-			} else {
-				logChanFull = false
-			}
+			logChanFull = usagePercent > 80
 			logChanFullMtx.Unlock()
-
-		// 处理关闭信号
 		case <-closeChan:
-			// 刷写剩余日志
 			if len(logs) > 0 {
-				startTime := time.Now()
-				err := loggerImpl.Log(logs)
-				logLatency.WithLabelValues("shutdown").Observe(time.Since(startTime).Seconds())
-
-				if err != nil {
-					fmt.Println("Failed to log:", err)
-				}
-
-				// 增加指标统计
-				for _, logEntry := range logs {
-					logEntriesTotal.WithLabelValues(logEntry.Level, logEntry.Service).Inc()
-				}
+				flushLogs(logs)
 			}
-			logs = nil
 			return
 		}
 	}
 }
 
-// IsLogChanFull 检查日志通道是否接近满载
+func flushLogs(logs []*LogEntry) {
+	if len(logs) == 0 {
+		return
+	}
+	startTime := time.Now()
+	if err := loggerImpl.Log(logs); err != nil {
+		fallbackLogger.Error().Err(err).Msg("Failed to write logs to primary backend")
+	}
+	logLatency.WithLabelValues("batch").Observe(time.Since(startTime).Seconds())
+
+	for _, logEntry := range logs {
+		logEntriesTotal.WithLabelValues(logEntry.Level, logEntry.Service).Inc()
+		// 清理 fields 以便复用
+		for k := range logEntry.Fields {
+			delete(logEntry.Fields, k)
+		}
+		logPool.Put(logEntry)
+	}
+}
+
 func IsLogChanFull() bool {
 	logChanFullMtx.RLock()
 	defer logChanFullMtx.RUnlock()
 	return logChanFull
 }
 
-// Shutdown 优雅关闭日志系统
-// 发送关闭信号并等待所有日志处理完成
 func Shutdown() {
 	close(closeChan)
 	wg.Wait()
 }
 
-// Info 记录信息日志
-func Info(msg, module string, extra [][]string) {
-	logChan <- LogEntry{
-		Service:   defaultService,
-		Module:    module,
-		Timestamp: time.Now(),
-		Level:     "info",
-		Message:   msg,
-		Extra:     extra,
+func (l *Logger) submit(level, msg, module string, err error, ctx context.Context, args ...interface{}) {
+	if !shouldLog(level) {
+		return
+	}
+
+	entry := logPool.Get().(*LogEntry)
+	entry.Service = defaultService
+	entry.Module = module
+	entry.Timestamp = time.Now()
+	entry.Level = level
+	entry.Message = msg
+	if err != nil {
+		entry.Error = err.Error()
+	} else {
+		entry.Error = ""
+	}
+	entry.Context = ctx
+
+	// 合并预设字段和单次调用字段
+	for k, v := range l.fields {
+		entry.Fields[k] = v
+	}
+	for i := 0; i < len(args); i += 2 {
+		if i+1 < len(args) {
+			if key, ok := args[i].(string); ok {
+				entry.Fields[key] = args[i+1]
+			}
+		}
+	}
+
+	select {
+	case logChan <- entry:
+	default:
+		logDroppedTotal.WithLabelValues(entry.Service).Inc()
+		logPool.Put(entry)
 	}
 }
 
-// Error 记录错误日志
-func Error(err error, msg, module string, extra [][]string) {
-	logChan <- LogEntry{
-		Service:   defaultService,
-		Module:    module,
-		Timestamp: time.Now(),
-		Level:     "error",
-		Message:   msg,
-		Error:     err.Error(),
-		Extra:     extra,
+// With 返回一个带有预设字段的新 Logger
+func (l *Logger) With(args ...interface{}) *Logger {
+	newFields := make(map[string]interface{}, len(l.fields)+len(args)/2)
+	for k, v := range l.fields {
+		newFields[k] = v
 	}
+	for i := 0; i < len(args); i += 2 {
+		if i+1 < len(args) {
+			if key, ok := args[i].(string); ok {
+				newFields[key] = args[i+1]
+			}
+		}
+	}
+	return &Logger{fields: newFields}
 }
 
-// Warn 记录警告日志
-func Warn(msg, module string, extra [][]string) {
-	logChan <- LogEntry{
-		Service:   defaultService,
-		Module:    module,
-		Timestamp: time.Now(),
-		Level:     "warn",
-		Message:   msg,
-		Extra:     extra,
-	}
+// Global functions delegating to the root logger
+func With(args ...interface{}) *Logger {
+	return rootLogger.With(args...)
 }
 
-// Debug 记录调试日志
-func Debug(msg, module string, extra [][]string) {
-	logChan <- LogEntry{
-		Service:   defaultService,
-		Module:    module,
-		Timestamp: time.Now(),
-		Level:     "debug",
-		Message:   msg,
-		Extra:     extra,
-	}
+func (l *Logger) Info(msg, module string, args ...interface{}) {
+	l.submit("info", msg, module, nil, nil, args...)
 }
 
-// InfoWithContext 带上下文的信息日志
-func InfoWithContext(ctx context.Context, msg, module string, extra [][]string) {
-	logChan <- LogEntry{
-		Service:   defaultService,
-		Module:    module,
-		Timestamp: time.Now(),
-		Level:     "info",
-		Message:   msg,
-		Extra:     extra,
-		Context:   ctx,
-	}
+func Info(msg, module string, args ...interface{}) {
+	rootLogger.Info(msg, module, args...)
 }
 
-// ErrorWithContext 带上下文的错误日志
-func ErrorWithContext(ctx context.Context, err error, msg, module string, extra [][]string) {
-	logChan <- LogEntry{
-		Service:   defaultService,
-		Module:    module,
-		Timestamp: time.Now(),
-		Level:     "error",
-		Message:   msg,
-		Error:     err.Error(),
-		Extra:     extra,
-		Context:   ctx,
-	}
+func (l *Logger) Warn(msg, module string, args ...interface{}) {
+	l.submit("warn", msg, module, nil, nil, args...)
 }
 
-// WarnWithContext 带上下文的警告日志
-func WarnWithContext(ctx context.Context, msg, module string, extra [][]string) {
-	logChan <- LogEntry{
-		Service:   defaultService,
-		Module:    module,
-		Timestamp: time.Now(),
-		Level:     "warn",
-		Message:   msg,
-		Extra:     extra,
-		Context:   ctx,
-	}
+func Warn(msg, module string, args ...interface{}) {
+	rootLogger.Warn(msg, module, args...)
 }
 
-// DebugWithContext 带上下文的调试日志
-func DebugWithContext(ctx context.Context, msg, module string, extra [][]string) {
-	logChan <- LogEntry{
-		Service:   defaultService,
-		Module:    module,
-		Timestamp: time.Now(),
-		Level:     "debug",
-		Message:   msg,
-		Extra:     extra,
-		Context:   ctx,
-	}
+func (l *Logger) Error(err error, msg, module string, args ...interface{}) {
+	l.submit("error", msg, module, err, nil, args...)
+}
+
+func Error(err error, msg, module string, args ...interface{}) {
+	rootLogger.Error(err, msg, module, args...)
+}
+
+func (l *Logger) Debug(msg, module string, args ...interface{}) {
+	l.submit("debug", msg, module, nil, nil, args...)
+}
+
+func Debug(msg, module string, args ...interface{}) {
+	rootLogger.Debug(msg, module, args...)
+}
+
+func (l *Logger) InfoWithContext(ctx context.Context, msg, module string, args ...interface{}) {
+	l.submit("info", msg, module, nil, ctx, args...)
+}
+
+func InfoWithContext(ctx context.Context, msg, module string, args ...interface{}) {
+	rootLogger.InfoWithContext(ctx, msg, module, args...)
+}
+
+func (l *Logger) WarnWithContext(ctx context.Context, msg, module string, args ...interface{}) {
+	l.submit("warn", msg, module, nil, ctx, args...)
+}
+
+func WarnWithContext(ctx context.Context, msg, module string, args ...interface{}) {
+	rootLogger.WarnWithContext(ctx, msg, module, args...)
+}
+
+func (l *Logger) ErrorWithContext(ctx context.Context, err error, msg, module string, args ...interface{}) {
+	l.submit("error", msg, module, err, ctx, args...)
+}
+
+func ErrorWithContext(ctx context.Context, err error, msg, module string, args ...interface{}) {
+	rootLogger.ErrorWithContext(ctx, err, msg, module, args...)
+}
+
+func (l *Logger) DebugWithContext(ctx context.Context, msg, module string, args ...interface{}) {
+	l.submit("debug", msg, module, nil, ctx, args...)
+}
+
+func DebugWithContext(ctx context.Context, msg, module string, args ...interface{}) {
+	rootLogger.DebugWithContext(ctx, msg, module, args...)
 }

@@ -104,6 +104,13 @@ func (ed *EasyDatabase) Begin() (TxTransaction, error) {
 	return &GormTransaction{DB: tx}, nil
 }
 
+// RunInTransaction 在事务中执行操作
+func (ed *EasyDatabase) RunInTransaction(fn func(tx TxTransaction) error) error {
+	return ed.DB.Transaction(func(tx *gorm.DB) error {
+		return fn(&GormTransaction{DB: tx})
+	})
+}
+
 // NewEasyDatabase 创建新的数据库实例
 // 根据数据库类型创建相应的数据库连接
 // 参数:

@@ -22,62 +22,28 @@ import (
 )
 
 // ZerologLogger 实现本地文件日志记录
-// 提供日志轮转、异步写入、多级日志控制等功能
-// 使用lumberjack实现日志文件的自动轮转
-// 支持按天分割日志文件
 type ZerologLogger struct {
-	service     string             // 服务名称，用于日志标记
-	logLevel    string             // 当前日志级别
-	logger      zerolog.Logger     // zerolog 实例
-	rotator     *lumberjack.Logger // 日志文件轮转器
-	currentDay  string             // 当前日期，用于日志文件按天分割
-	initialized bool               // 是否已初始化
-
-	mu sync.Mutex // 互斥锁，用于保护日志写入
-}
-
-// getLogFilePath 生成日志文件路径
-// 参数:
-//
-//	date - 日期字符串，用于按天分割日志
-//
-// 返回:
-//
-//	完整的日志文件路径
-func getLogFilePath(date string) string {
-	logDir := filepath.Join("logs", date)
-	if err := os.MkdirAll(logDir, os.ModePerm); err != nil {
-		panic("failed to create log directory: " + err.Error())
-	}
-	return filepath.Join(logDir, "app.log")
+	service     string
+	logLevel    string
+	logger      zerolog.Logger
+	rotator     *lumberjack.Logger
+	currentDay  string
+	initialized bool
+	mu          sync.Mutex
 }
 
 // NewZerologLogger 创建新的Zerolog日志记录器
-// 参数:
-//
-//	service - 服务名称
-//	level   - 日志级别(debug/info/warn/error)
-//
-// 返回:
-//
-//	*ZerologLogger 实例
-func NewZerologLogger(service, level string) *ZerologLogger {
+func NewZerologLogger(service, level string) BackendLogger {
 	z := &ZerologLogger{
 		service:     service,
 		logLevel:    strings.ToLower(level),
 		currentDay:  time.Now().Format("2006-01-02"),
 		initialized: false,
 	}
-
 	z.rotateLogger()
 	return z
 }
 
-// rotateLogger 实现日志文件轮转
-// 功能:
-//   - 每天创建新的日志文件
-//   - 配置日志轮转策略
-//   - 设置日志格式和级别
 func (z *ZerologLogger) rotateLogger() {
 	z.mu.Lock()
 	defer z.mu.Unlock()
@@ -89,11 +55,11 @@ func (z *ZerologLogger) rotateLogger() {
 
 	logPath := getLogFilePath(today)
 	rotator := &lumberjack.Logger{
-		Filename:   logPath, // 日志文件路径
-		MaxSize:    10,      // 每个日志文件最大10MB
-		MaxBackups: 5,       // 保留5个旧日志文件
-		MaxAge:     7,       // 日志文件保留7天
-		Compress:   false,   // 不压缩旧日志，节省CPU资源
+		Filename:   logPath,
+		MaxSize:    10,
+		MaxBackups: 5,
+		MaxAge:     7,
+		Compress:   false,
 	}
 
 	zerolog.TimeFieldFormat = time.RFC3339
@@ -118,43 +84,17 @@ func (z *ZerologLogger) rotateLogger() {
 	z.initialized = true
 }
 
-// writeLog 写入日志条目
-// 根据日志级别将日志条目写入相应的输出
-// 参数:
-//
-//	entry - 日志条目
-func (z *ZerologLogger) writeLog(entry LogEntry) {
-	logger := z.logger.With().
-		Str("app", entry.Service).
-		Str("module", entry.Module).
-		Fields(entry.Extra).Logger()
-
-	// 如果有错误信息，则添加到日志中
-	if entry.Error != "" {
-		logger.Err(fmt.Errorf(entry.Error)).Msg(entry.Message)
-		return
+func getLogFilePath(date string) string {
+	logDir := filepath.Join("logs", date)
+	if err := os.MkdirAll(logDir, os.ModePerm); err != nil {
+		panic("failed to create log directory: " + err.Error())
 	}
-
-	switch strings.ToUpper(entry.Level) {
-	case "DEBUG":
-		logger.Debug().Msg(entry.Message)
-	case "INFO":
-		logger.Info().Msg(entry.Message)
-	case "WARN":
-		logger.Warn().Msg(entry.Message)
-	case "ERROR":
-		logger.Error().Msg(entry.Message)
-	default:
-		logger.Info().Msg(entry.Message)
-	}
+	return filepath.Join(logDir, "app.log")
 }
 
-// Log 实现Logger接口的日志记录方法
-// 批量处理日志条目，根据日志级别过滤并写入日志
-// 参数:
-//
-//	logs - 日志条目
-func (l *ZerologLogger) Log(logs []LogEntry) error {
+// Log 实现 BackendLogger 接口
+func (l *ZerologLogger) Log(logs []*LogEntry) error {
+	l.rotateLogger() // 确保日志文件按天轮转
 	for _, entry := range logs {
 		if !shouldLog(entry.Level) {
 			continue
@@ -164,35 +104,37 @@ func (l *ZerologLogger) Log(logs []LogEntry) error {
 	return nil
 }
 
-// UpdateLogLevel 更新日志级别（支持动态配置更新）
+func (l *ZerologLogger) writeLog(entry *LogEntry) {
+	var event *zerolog.Event
+	switch entry.Level {
+	case "debug":
+		event = l.logger.Debug()
+	case "info":
+		event = l.logger.Info()
+	case "warn":
+		event = l.logger.Warn()
+	case "error":
+		event = l.logger.Error()
+		if entry.Error != "" {
+			event = event.Err(fmt.Errorf(entry.Error))
+		}
+	default:
+		event = l.logger.Info()
+	}
+
+	event.Str("module", entry.Module).Fields(entry.Fields).Msg(entry.Message)
+}
+
+// UpdateLogLevel 更新日志级别
 func (l *ZerologLogger) UpdateLogLevel(level string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-
 	l.logLevel = strings.ToLower(level)
-
-	// 重新设置logger的日志级别
-	switch level {
-	case "debug":
-		l.logger = l.logger.Level(zerolog.DebugLevel)
-	case "info":
-		l.logger = l.logger.Level(zerolog.InfoLevel)
-	case "warn":
-		l.logger = l.logger.Level(zerolog.WarnLevel)
-	case "error":
-		l.logger = l.logger.Level(zerolog.ErrorLevel)
-	default:
-		l.logger = l.logger.Level(zerolog.InfoLevel)
-	}
+	l.rotateLogger() // 重新初始化以应用新级别
 }
 
 // Close 关闭日志记录器
-// 功能:
-//   - 关闭日志工作协程
-//   - 等待所有日志写入完成
-//   - 关闭日志文件
 func (l *ZerologLogger) Close() {
-	close(closeChan)
 	if l.rotator != nil {
 		l.rotator.Close()
 	}

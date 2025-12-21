@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/patrickmn/go-cache"
 	"gopkg.in/yaml.v2"
 
 	"github.com/mercari/go-circuitbreaker"
@@ -92,6 +93,7 @@ type Gateway struct {
 	rlMutex         sync.RWMutex                              // 限流器读写锁
 	config          *model.GatewayConfig                      // 当前配置
 	configMutex     sync.RWMutex                              // 配置读写锁
+	authCache       *cache.Cache                              // 新增：认证缓存
 	// 新增：认证相关的配置和客户端凭证
 	clientID     string
 	clientSecret string
@@ -108,7 +110,13 @@ func (g *Gateway) AuthHandler(next http.HandlerFunc) http.HandlerFunc {
 		}
 		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
 
-		// 2. 获取auth-svc实例
+		// 2. 检查本地缓存
+		if _, found := g.authCache.Get(tokenStr); found {
+			next(w, r) // 缓存命中，直接放行
+			return
+		}
+
+		// 3. 获取auth-svc实例
 		authTarget := g.sd.GetService("auth-svc") // 利用现有的服务发现
 		if authTarget == "" {
 			logger.Error(nil, "auth-svc not found in service discovery", "gateway", [][]string{{"path", r.URL.Path}})
@@ -116,7 +124,7 @@ func (g *Gateway) AuthHandler(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		// 3. 构造到auth-svc的验证请求
+		// 4. 构造到auth-svc的验证请求
 		verifyURL := fmt.Sprintf("http://%s/oauth2/verify", authTarget)
 		req, err := http.NewRequestWithContext(r.Context(), "POST", verifyURL, nil)
 		if err != nil {
@@ -130,10 +138,7 @@ func (g *Gateway) AuthHandler(next http.HandlerFunc) http.HandlerFunc {
 		// 设置网关自身的客户端令牌（用于通过auth-svc的客户端认证）
 		req.SetBasicAuth(g.clientID, g.clientSecret)
 
-		// 设置网关自身的客户端令牌（用于通过auth-svc的客户端认证）
-		req.SetBasicAuth(g.clientID, g.clientSecret)
-
-		// 4. 执行验证请求
+		// 5. 执行验证请求
 		resp, err := g.httpClient.Do(req)
 		if err != nil || resp.StatusCode != http.StatusOK {
 			if err != nil {
@@ -146,7 +151,9 @@ func (g *Gateway) AuthHandler(next http.HandlerFunc) http.HandlerFunc {
 		}
 		defer resp.Body.Close()
 
-		// 5. 令牌有效，继续执行后续流程
+		// 6. 令牌有效，存入缓存并继续执行后续流程
+		// 假设Token有效期为1小时，缓存5分钟
+		g.authCache.Set(tokenStr, true, 5*time.Minute)
 		next(w, r)
 	}
 }
@@ -188,6 +195,7 @@ func NewGateway(sd *discovery.ServiceDiscovery) *Gateway {
 		routeRules:      make([]*model.RouteRule, 0),
 		circuitBreakers: make(map[string]*circuitbreaker.CircuitBreaker),
 		rateLimiters:    make(map[string]*rate.Limiter),
+		authCache:       cache.New(5*time.Minute, 10*time.Minute), // 默认5分钟过期，10分钟清理一次
 	}
 	// 从配置中加载网关自身的认证凭证
 	if gateway.config != nil && gateway.config.Auth != nil {

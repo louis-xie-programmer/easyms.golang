@@ -4,7 +4,6 @@ package config
 import (
 	"easyms/internal/shared/entities"
 	"fmt"
-	"io/ioutil"
 	"os"
 
 	"gopkg.in/yaml.v2"
@@ -40,7 +39,7 @@ func (lc *LocalConfig) OnChange() func(*entities.AppConfig) {
 func (lc *LocalConfig) LoadAppConfig() error {
 	appPath := GetLocalAppConfigFileName(lc.Env)
 
-	data, err := ioutil.ReadFile(appPath)
+	data, err := os.ReadFile(appPath)
 	if err != nil {
 		return err
 	}
@@ -63,7 +62,7 @@ func (lc *LocalConfig) LoadAppConfig() error {
 	}
 
 	// 读取本地服务配置文件
-	data, err = ioutil.ReadFile(path)
+	data, err = os.ReadFile(path)
 	if err != nil {
 		return err
 	}

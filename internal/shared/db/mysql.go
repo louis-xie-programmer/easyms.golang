@@ -146,3 +146,10 @@ func (md *MysqlDatabase) Begin() (TxTransaction, error) {
 	}
 	return &GormTransaction{DB: tx}, nil
 }
+
+// RunInTransaction 在事务中执行操作
+func (md *MysqlDatabase) RunInTransaction(fn func(tx TxTransaction) error) error {
+	return md.DB.Transaction(func(tx *gorm.DB) error {
+		return fn(&GormTransaction{DB: tx})
+	})
+}

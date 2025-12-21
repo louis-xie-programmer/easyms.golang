@@ -53,16 +53,6 @@ type TokenStore interface {
 // 返回值:
 //   - TokenStore: 令牌存储实例
 func NewJwtTokenStore(jwtTokenEnhancer *JwtTokenEnhancer, db db.Database, redisClient *db.EasyRedis) TokenStore {
-	// 自动迁移创建撤销令牌表
-	if db != nil {
-		err := db.AutoMigrate(&RevokedToken{})
-		if err != nil {
-			// 如果迁移失败，记录日志但继续执行
-			// 在实际应用中应该有更好的错误处理机制
-			logger.Error(err, "auto migrate revoked_tokens table error: %v", "auth-svc", nil)
-		}
-	}
-
 	return &JwtTokenStore{
 		jwtTokenEnhancer: jwtTokenEnhancer,
 		db:               db,

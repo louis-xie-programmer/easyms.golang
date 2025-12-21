@@ -246,6 +246,13 @@ func (pd *PostgresDatabase) Begin() (TxTransaction, error) {
 	return &GormTransaction{DB: tx}, nil
 }
 
+// RunInTransaction 在事务中执行操作
+func (pd *PostgresDatabase) RunInTransaction(fn func(tx TxTransaction) error) error {
+	return pd.DB.Transaction(func(tx *gorm.DB) error {
+		return fn(&GormTransaction{DB: tx})
+	})
+}
+
 // GetDB 获取底层的GORM数据库实例
 func (pd *PostgresDatabase) GetDB() *gorm.DB {
 	return pd.DB

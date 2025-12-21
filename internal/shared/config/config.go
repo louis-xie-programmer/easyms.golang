@@ -6,7 +6,7 @@ import (
 	"easyms/internal/shared/entities"
 	"fmt"
 	"gopkg.in/yaml.v2"
-	"io/ioutil"
+	"os"
 )
 
 var (
@@ -38,7 +38,7 @@ func GetAppConfig() *entities.AppConfig {
 // 返回配置存储对象和可能的错误
 func InitAppConfigStore() (*entities.AppConfigStore, error) {
 	// 读取应用配置文件
-	data, err := ioutil.ReadFile("configs/app.yaml")
+	data, err := os.ReadFile("configs/app.yaml")
 	if err != nil {
 		fmt.Println("Failed to read app config file")
 		return nil, err

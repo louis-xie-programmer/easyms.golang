@@ -190,6 +190,13 @@ func (rw *ReadWriteSplitDatabase) Begin() (TxTransaction, error) {
 	return &GormTransaction{DB: tx}, nil
 }
 
+// RunInTransaction 在事务中执行操作（事务必须在主库上执行）
+func (rw *ReadWriteSplitDatabase) RunInTransaction(fn func(tx TxTransaction) error) error {
+	return rw.getWriteDB().Transaction(func(tx *gorm.DB) error {
+		return fn(&GormTransaction{DB: tx})
+	})
+}
+
 // WithContext 在指定上下文中执行数据库操作
 func (rw *ReadWriteSplitDatabase) WithContext(ctx context.Context) *ReadWriteSplitDatabase {
 	// 为所有数据库连接设置上下文
