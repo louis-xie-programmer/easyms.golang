@@ -33,6 +33,31 @@ import (
 	"easyms/internal/shared/logger"
 )
 
+// Middleware 定义了中间件类型
+type Middleware func(http.Handler) http.Handler
+
+// CircuitBreakerConfig 熔断器配置
+type CircuitBreakerConfig struct {
+	CounterResetInterval time.Duration
+	HalfOpenMaxSuccesses int64
+	FailureRateWindow    int64
+	FailureRateThreshold float64
+}
+
+// RateLimitConfig 限流配置
+type RateLimitConfig struct {
+	DefaultRate  float64
+	DefaultBurst int
+	IPLimits     map[string]*struct {
+		Rate  float64
+		Burst int
+	}
+	UALimits map[string]*struct {
+		Rate  float64
+		Burst int
+	}
+}
+
 // ReverseProxyPool 反向代理池，用于缓存和复用ReverseProxy实例
 type ReverseProxyPool struct {
 	proxies map[string]*httputil.ReverseProxy
@@ -41,7 +66,6 @@ type ReverseProxyPool struct {
 
 // GetProxy 获取或创建指定目标的反向代理
 func (p *ReverseProxyPool) GetProxy(target string) (*httputil.ReverseProxy, error) {
-	// 先尝试读锁获取已存在的代理
 	p.mutex.RLock()
 	proxy, exists := p.proxies[target]
 	p.mutex.RUnlock()
@@ -50,7 +74,6 @@ func (p *ReverseProxyPool) GetProxy(target string) (*httputil.ReverseProxy, erro
 		return proxy, nil
 	}
 
-	// 如果不存在，创建新的代理
 	u, err := url.Parse(target)
 	if err != nil {
 		return nil, err
@@ -58,18 +81,22 @@ func (p *ReverseProxyPool) GetProxy(target string) (*httputil.ReverseProxy, erro
 
 	proxy = httputil.NewSingleHostReverseProxy(u)
 
-	// 修改 Director 修正 Host 和 URL
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
 		originalDirector(req)
-
-		// 设置正确的 Host，避免回流到网关
 		req.Host = u.Host
 		req.URL.Host = u.Host
 		req.URL.Scheme = u.Scheme
 	}
 
-	// 写锁保存代理实例
+	// 设置自定义错误处理器
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		logger.Error(err, "Reverse proxy error", "gateway", "target", u.Host)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		w.Write([]byte(fmt.Sprintf(`{"error": "upstream service unavailable", "details": "%v"}`, err)))
+	}
+
 	p.mutex.Lock()
 	p.proxies[target] = proxy
 	p.mutex.Unlock()
@@ -78,95 +105,31 @@ func (p *ReverseProxyPool) GetProxy(target string) (*httputil.ReverseProxy, erro
 }
 
 // Gateway API网关结构体
-// 包含服务发现客户端，用于获取后端服务实例
-// 并实现负载均衡和熔断功能
 type Gateway struct {
-	sd              *discovery.ServiceDiscovery               // 服务发现客户端
-	proxyPool       *ReverseProxyPool                         // 反向代理池
-	httpClient      *http.Client                              // 专用HTTP客户端，带有连接池和超时设置
-	useWeighted     bool                                      // 是否使用权重负载均衡
-	routeRules      []*model.RouteRule                        // 路由规则
-	routeMutex      sync.RWMutex                              // 路由规则读写锁
-	circuitBreakers map[string]*circuitbreaker.CircuitBreaker // 熔断器映射
-	cbMutex         sync.RWMutex                              // 熔断器读写锁
-	rateLimiters    map[string]*rate.Limiter                  // 限流器映射
-	rlMutex         sync.RWMutex                              // 限流器读写锁
-	config          *model.GatewayConfig                      // 当前配置
-	configMutex     sync.RWMutex                              // 配置读写锁
-	authCache       *cache.Cache                              // 新增：认证缓存
-	// 新增：认证相关的配置和客户端凭证
-	clientID     string
-	clientSecret string
-}
-
-// AuthHandler 创建一个HTTP中间件，用于通过auth-svc验证JWT Token
-func (g *Gateway) AuthHandler(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// 1. 提取Token
-		authHeader := r.Header.Get("Authorization")
-		if !strings.HasPrefix(authHeader, "Bearer ") {
-			http.Error(w, `{"error": "Missing or invalid Authorization header"}`, http.StatusUnauthorized)
-			return
-		}
-		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
-
-		// 2. 检查本地缓存
-		if _, found := g.authCache.Get(tokenStr); found {
-			next(w, r) // 缓存命中，直接放行
-			return
-		}
-
-		// 3. 获取auth-svc实例
-		authTarget := g.sd.GetService("auth-svc") // 利用现有的服务发现
-		if authTarget == "" {
-			logger.Error(nil, "auth-svc not found in service discovery", "gateway", [][]string{{"path", r.URL.Path}})
-			http.Error(w, `{"error": "authentication service unavailable"}`, http.StatusInternalServerError)
-			return
-		}
-
-		// 4. 构造到auth-svc的验证请求
-		verifyURL := fmt.Sprintf("http://%s/oauth2/verify", authTarget)
-		req, err := http.NewRequestWithContext(r.Context(), "POST", verifyURL, nil)
-		if err != nil {
-			http.Error(w, `{"error": "failed to create request"}`, http.StatusInternalServerError)
-			return
-		}
-
-		// 设置要验证的用户令牌
-		req.Header.Set("Authorization", "Bearer "+tokenStr)
-
-		// 设置网关自身的客户端令牌（用于通过auth-svc的客户端认证）
-		req.SetBasicAuth(g.clientID, g.clientSecret)
-
-		// 5. 执行验证请求
-		resp, err := g.httpClient.Do(req)
-		if err != nil || resp.StatusCode != http.StatusOK {
-			if err != nil {
-				logger.Warn(fmt.Sprintf("Auth verification failed: %v", err), "gateway", [][]string{{"service", "auth-svc"}})
-			} else {
-				logger.Warn(fmt.Sprintf("Auth verification failed with status: %d", resp.StatusCode), "gateway", [][]string{{"service", "auth-svc"}})
-			}
-			http.Error(w, `{"error": "invalid or expired token"}`, http.StatusUnauthorized)
-			return
-		}
-		defer resp.Body.Close()
-
-		// 6. 令牌有效，存入缓存并继续执行后续流程
-		// 假设Token有效期为1小时，缓存5分钟
-		g.authCache.Set(tokenStr, true, 5*time.Minute)
-		next(w, r)
-	}
+	sd              *discovery.ServiceDiscovery
+	proxyPool       *ReverseProxyPool
+	httpClient      *http.Client
+	useWeighted     bool
+	routeRules      []*model.RouteRule
+	routeMutex      sync.RWMutex
+	circuitBreakers map[string]*circuitbreaker.CircuitBreaker
+	cbMutex         sync.RWMutex
+	cbConfig        map[string]*CircuitBreakerConfig
+	cbConfigMutex   sync.RWMutex
+	rateLimiters    map[string]*rate.Limiter
+	rlMutex         sync.RWMutex
+	rlConfig        *RateLimitConfig
+	rlConfigMutex   sync.RWMutex
+	config          *model.GatewayConfig
+	configMutex     sync.RWMutex
+	authCache       *cache.Cache
+	clientID        string
+	clientSecret    string
+	middlewares     []Middleware
 }
 
 // NewGateway 创建新的API网关实例
-// 通过传入的服务发现客户端初始化网关
-// 参数:
-//   - sd: 服务发现客户端
-//
-// 返回值:
-//   - *Gateway: API网关实例
 func NewGateway(sd *discovery.ServiceDiscovery) *Gateway {
-	// 创建带有连接池和超时设置的HTTP客户端
 	transport := &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		DialContext: (&net.Dialer{
@@ -186,28 +149,290 @@ func NewGateway(sd *discovery.ServiceDiscovery) *Gateway {
 	}
 
 	gateway := &Gateway{
-		sd: sd,
-		proxyPool: &ReverseProxyPool{
-			proxies: make(map[string]*httputil.ReverseProxy),
-		},
+		sd:              sd,
+		proxyPool:       &ReverseProxyPool{proxies: make(map[string]*httputil.ReverseProxy)},
 		httpClient:      httpClient,
 		useWeighted:     false,
 		routeRules:      make([]*model.RouteRule, 0),
 		circuitBreakers: make(map[string]*circuitbreaker.CircuitBreaker),
+		cbConfig:        make(map[string]*CircuitBreakerConfig),
 		rateLimiters:    make(map[string]*rate.Limiter),
-		authCache:       cache.New(5*time.Minute, 10*time.Minute), // 默认5分钟过期，10分钟清理一次
+		rlConfig: &RateLimitConfig{
+			DefaultRate:  100,
+			DefaultBurst: 200,
+			IPLimits: make(map[string]*struct {
+				Rate  float64
+				Burst int
+			}),
+			UALimits: make(map[string]*struct {
+				Rate  float64
+				Burst int
+			}),
+		},
+		authCache:   cache.New(5*time.Minute, 10*time.Minute),
+		middlewares: make([]Middleware, 0),
 	}
-	// 从配置中加载网关自身的认证凭证
-	if gateway.config != nil && gateway.config.Auth != nil {
-		gateway.clientID = gateway.config.Auth.ClientID
-		gateway.clientSecret = gateway.config.Auth.ClientSecret
+
+	gateway.cbConfig["default"] = &CircuitBreakerConfig{
+		CounterResetInterval: 10 * time.Second,
+		HalfOpenMaxSuccesses: 4,
+		FailureRateWindow:    10,
+		FailureRateThreshold: 0.4,
 	}
+
+	// 注册默认中间件
+	gateway.Use(gateway.RateLimitMiddleware)
+	gateway.Use(gateway.AuthMiddleware)
+
 	return gateway
 }
+
+// Use 添加中间件到网关
+func (g *Gateway) Use(mw Middleware) {
+	g.middlewares = append(g.middlewares, mw)
+}
+
+// AuthMiddleware 认证中间件
+func (g *Gateway) AuthMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 对特定路径（如健康检查）跳过认证
+		if r.URL.Path == "/health" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		authHeader := r.Header.Get("Authorization")
+		if !strings.HasPrefix(authHeader, "Bearer ") {
+			http.Error(w, `{"error": "Missing or invalid Authorization header"}`, http.StatusUnauthorized)
+			return
+		}
+		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
+
+		if _, found := g.authCache.Get(tokenStr); found {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		authTarget := g.sd.GetService("auth-svc")
+		if authTarget == "" {
+			logger.Error(nil, "auth-svc not found in service discovery", "gateway", "path", r.URL.Path)
+			http.Error(w, `{"error": "authentication service unavailable"}`, http.StatusInternalServerError)
+			return
+		}
+
+		verifyURL := fmt.Sprintf("http://%s/oauth2/verify", authTarget)
+		req, err := http.NewRequestWithContext(r.Context(), "POST", verifyURL, nil)
+		if err != nil {
+			http.Error(w, `{"error": "failed to create request"}`, http.StatusInternalServerError)
+			return
+		}
+
+		req.Header.Set("Authorization", "Bearer "+tokenStr)
+		req.SetBasicAuth(g.clientID, g.clientSecret)
+
+		resp, err := g.httpClient.Do(req)
+		if err != nil || resp.StatusCode != http.StatusOK {
+			msg := "invalid or expired token"
+			if err != nil {
+				logger.Warn("Auth verification failed", "gateway", "service", "auth-svc", "error", err)
+			} else {
+				logger.Warn("Auth verification failed", "gateway", "service", "auth-svc", "status", resp.StatusCode)
+			}
+			http.Error(w, fmt.Sprintf(`{"error": "%s"}`, msg), http.StatusUnauthorized)
+			return
+		}
+		defer resp.Body.Close()
+
+		g.authCache.Set(tokenStr, true, 5*time.Minute)
+		next.ServeHTTP(w, r)
+	})
+}
+
+// RateLimitMiddleware 限流中间件
+func (g *Gateway) RateLimitMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !g.checkRateLimit(r) {
+			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// ServeHTTP 实现HTTP处理器接口
+func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// 核心反向代理逻辑
+	proxyHandler := http.HandlerFunc(g.reverseProxy)
+
+	// 构建中间件链
+	var chainedHandler http.Handler = proxyHandler
+	for i := len(g.middlewares) - 1; i >= 0; i-- {
+		chainedHandler = g.middlewares[i](chainedHandler)
+	}
+
+	chainedHandler.ServeHTTP(w, r)
+}
+
+// reverseProxy 是核心的反向代理处理器
+func (g *Gateway) reverseProxy(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+
+	rule := g.matchRoute(r.URL.Path)
+	var service, path string
+
+	if rule != nil {
+		service, path = g.applyRouteRule(r, rule)
+	} else {
+		parts := strings.Split(r.URL.Path, "/")
+		if len(parts) < 2 {
+			http.Error(w, "invalid path", http.StatusBadRequest)
+			return
+		}
+		service = parts[1]
+		path = "/" + strings.Join(parts[2:], "/")
+	}
+
+	var target string
+	if g.useWeighted {
+		target = g.sd.GetWeightedService(service)
+	} else {
+		target = g.sd.GetService(service)
+	}
+
+	if target == "" {
+		http.Error(w, "service not found", http.StatusServiceUnavailable)
+		return
+	}
+
+	upstreamURL := "http://" + target + path
+	log.Printf("Forwarding => %s (service: %s)", upstreamURL, service)
+
+	proxy, err := g.proxyPool.GetProxy("http://" + target)
+	if err != nil {
+		http.Error(w, "invalid target", http.StatusBadGateway)
+		return
+	}
+
+	proxy.Transport = g.httpClient.Transport
+	proxy.FlushInterval = time.Millisecond * 100
+
+	originalDirector := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		originalDirector(req)
+		url, _ := url.Parse("http://" + target)
+		req.Host = url.Host
+		req.URL.Host = url.Host
+		req.URL.Scheme = url.Scheme
+		if rule != nil {
+			g.modifyRequest(req, rule)
+		}
+	}
+
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		if rule != nil {
+			g.modifyResponse(resp, rule)
+		}
+		return nil
+	}
+
+	var bodyBytes []byte
+	if r.Body != nil {
+		bodyBytes, _ = io.ReadAll(r.Body)
+	}
+	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+
+	breaker := g.GetCircuitBreaker(service)
+
+	reqFunc := func() (interface{}, error) {
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer cancel()
+
+		outReq := r.Clone(ctx)
+		outReq.URL, _ = url.Parse(upstreamURL)
+		outReq.Host = target
+		outReq.RequestURI = ""
+
+		if rule != nil {
+			g.modifyRequest(outReq, rule)
+		}
+
+		return g.httpClient.Do(outReq)
+	}
+
+	result, err := breaker.Do(context.Background(), reqFunc)
+	if err != nil {
+		requestDuration := time.Since(startTime)
+		log.Printf("Circuit open or upstream failed for service=[%s], err=%v, duration=%v\n", service, err, requestDuration)
+		http.Error(w, "service unavailable (circuit open or upstream error)", http.StatusServiceUnavailable)
+		return
+	}
+
+	resp := result.(*http.Response)
+	defer resp.Body.Close()
+
+	for k, v := range resp.Header {
+		w.Header()[k] = v
+	}
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
+
+	requestDuration := time.Since(startTime)
+	log.Printf("Request completed for service=[%s], status=%d, duration=%v\n", service, resp.StatusCode, requestDuration)
+}
+
+// ... (其他方法保持不变) ...
+// UseWeightedLoadBalancer, AddRouteRule, RemoveRouteRule, GetRouteRules, SetCircuitBreakerConfig,
+// matchRoute, applyRouteRule, modifyRequest, modifyResponse, GetCircuitBreaker, SetRateLimitConfig,
+// GetRateLimiter, checkRateLimit, LoadConfig, UpdateConfig, EnhancedHealthCheck
 
 // UseWeightedLoadBalancer 启用权重负载均衡
 func (g *Gateway) UseWeightedLoadBalancer(use bool) {
 	g.useWeighted = use
+}
+
+// AddRouteRule 添加路由规则
+func (g *Gateway) AddRouteRule(rule *model.RouteRule) {
+	g.routeMutex.Lock()
+	defer g.routeMutex.Unlock()
+	g.routeRules = append(g.routeRules, rule)
+}
+
+// RemoveRouteRule 移除路由规则
+func (g *Gateway) RemoveRouteRule(serviceName string) {
+	g.routeMutex.Lock()
+	defer g.routeMutex.Unlock()
+
+	for i, rule := range g.routeRules {
+		if rule.ServiceName == serviceName {
+			g.routeRules = append(g.routeRules[:i], g.routeRules[i+1:]...)
+			break
+		}
+	}
+}
+
+// GetRouteRules 获取所有路由规则
+func (g *Gateway) GetRouteRules() []*model.RouteRule {
+	g.routeMutex.RLock()
+	defer g.routeMutex.RUnlock()
+
+	// 返回副本以避免外部修改
+	rules := make([]*model.RouteRule, len(g.routeRules))
+	copy(rules, g.routeRules)
+	return rules
+}
+
+// SetCircuitBreakerConfig 设置熔断器配置
+func (g *Gateway) SetCircuitBreakerConfig(serviceName string, config *CircuitBreakerConfig) {
+	g.cbConfigMutex.Lock()
+	defer g.cbConfigMutex.Unlock()
+	g.cbConfig[serviceName] = config
+
+	// 如果已存在该服务的熔断器，重新创建
+	g.cbMutex.Lock()
+	defer g.cbMutex.Unlock()
+	if _, exists := g.circuitBreakers[serviceName]; exists {
+		delete(g.circuitBreakers, serviceName)
+	}
 }
 
 // matchRoute 匹配路由规则
@@ -261,6 +486,12 @@ func (g *Gateway) modifyRequest(req *http.Request, rule *model.RouteRule) {
 	}
 }
 
+// modifyResponse 修改响应
+func (g *Gateway) modifyResponse(resp *http.Response, rule *model.RouteRule) {
+	// 这里可以添加响应修改逻辑
+	// 例如添加响应头、修改状态码等
+}
+
 // GetCircuitBreaker 获取服务对应的熔断器
 func (g *Gateway) GetCircuitBreaker(serviceName string) *circuitbreaker.CircuitBreaker {
 	g.cbMutex.RLock()
@@ -272,35 +503,22 @@ func (g *Gateway) GetCircuitBreaker(serviceName string) *circuitbreaker.CircuitB
 	}
 
 	// 获取配置
-	g.configMutex.RLock()
-	var config *model.CircuitBreakerServiceConfig
-	if g.config != nil && g.config.CircuitBreaker != nil {
-		if serviceConfig, ok := g.config.CircuitBreaker.Services[serviceName]; ok {
-			config = serviceConfig
-		}
+	g.cbConfigMutex.RLock()
+	config, configExists := g.cbConfig[serviceName]
+	if !configExists {
+		config = g.cbConfig["default"]
 	}
-	g.configMutex.RUnlock()
+	g.cbConfigMutex.RUnlock()
 
 	// 创建熔断器配置选项
 	opts := []circuitbreaker.BreakerOption{
 		circuitbreaker.WithOnStateChangeHookFn(func(from, to circuitbreaker.State) {
 			log.Printf("[CB][%s] 状态变更: %s -> %s\n", serviceName, from, to)
 		}),
-		circuitbreaker.WithCounterResetInterval(10 * time.Second),
+		circuitbreaker.WithCounterResetInterval(config.CounterResetInterval),
 		circuitbreaker.WithOpenTimeout(60 * time.Second),
-		circuitbreaker.WithHalfOpenMaxSuccesses(4),
-		circuitbreaker.WithTripFunc(circuitbreaker.NewTripFuncFailureRate(10, 0.4)),
-	}
-
-	// 应用自定义配置
-	if config != nil {
-		opts = append(opts,
-			circuitbreaker.WithCounterResetInterval(time.Duration(config.CounterResetInterval)*time.Second),
-			circuitbreaker.WithHalfOpenMaxSuccesses(config.HalfOpenMaxSuccesses),
-			circuitbreaker.WithTripFunc(circuitbreaker.NewTripFuncFailureRate(
-				config.FailureRateWindow,
-				config.FailureRateThreshold,
-			)))
+		circuitbreaker.WithHalfOpenMaxSuccesses(config.HalfOpenMaxSuccesses),
+		circuitbreaker.WithTripFunc(circuitbreaker.NewTripFuncFailureRate(config.FailureRateWindow, config.FailureRateThreshold)),
 	}
 
 	// 创建熔断器
@@ -312,6 +530,13 @@ func (g *Gateway) GetCircuitBreaker(serviceName string) *circuitbreaker.CircuitB
 	g.cbMutex.Unlock()
 
 	return cb
+}
+
+// SetRateLimitConfig 设置限流配置
+func (g *Gateway) SetRateLimitConfig(config *RateLimitConfig) {
+	g.rlConfigMutex.Lock()
+	defer g.rlConfigMutex.Unlock()
+	g.rlConfig = config
 }
 
 // GetRateLimiter 获取限流器
@@ -338,9 +563,9 @@ func (g *Gateway) GetRateLimiter(key string, rateLimit, burst int) *rate.Limiter
 // checkRateLimit 检查限流
 func (g *Gateway) checkRateLimit(req *http.Request) bool {
 	// 获取配置
-	g.configMutex.RLock()
-	rlConfig := g.config.RateLimit
-	g.configMutex.RUnlock()
+	g.rlConfigMutex.RLock()
+	rlConfig := g.rlConfig
+	g.rlConfigMutex.RUnlock()
 
 	if rlConfig == nil {
 		return true // 没有限流配置，默认允许
@@ -350,9 +575,9 @@ func (g *Gateway) checkRateLimit(req *http.Request) bool {
 	ua := req.UserAgent()
 
 	// IP限流
-	for _, rule := range rlConfig.IPLimits {
-		if rule.Net != nil && rule.Net.Contains(net.ParseIP(strings.Split(ip, ":")[0])) {
-			limiter := g.GetRateLimiter("ip:"+rule.CIDR, int(rule.Rate), rule.Burst)
+	for cidr, limit := range rlConfig.IPLimits {
+		if strings.HasPrefix(ip, cidr) {
+			limiter := g.GetRateLimiter("ip:"+cidr, int(limit.Rate), limit.Burst)
 			if !limiter.Allow() {
 				return false
 			}
@@ -361,9 +586,9 @@ func (g *Gateway) checkRateLimit(req *http.Request) bool {
 	}
 
 	// UA限流
-	for _, rule := range rlConfig.UALimits {
-		if rule.Regexp != nil && rule.Regexp.MatchString(ua) {
-			limiter := g.GetRateLimiter("ua:"+rule.Pattern, int(rule.Rate), rule.Burst)
+	for pattern, limit := range rlConfig.UALimits {
+		if strings.Contains(ua, pattern) {
+			limiter := g.GetRateLimiter("ua:"+pattern, int(limit.Rate), limit.Burst)
 			if !limiter.Allow() {
 				return false
 			}
@@ -380,6 +605,7 @@ func (g *Gateway) checkRateLimit(req *http.Request) bool {
 	return true
 }
 
+// LoadConfig 从应用配置加载网关配置
 func (g *Gateway) LoadConfig(path string) {
 	cfg, err := os.ReadFile(path)
 	if err != nil {
@@ -389,9 +615,7 @@ func (g *Gateway) LoadConfig(path string) {
 	if err := yaml.Unmarshal(cfg, &config); err != nil {
 		log.Fatalf("[GW] 解析配置文件失败: %v\n", err)
 	}
-	g.configMutex.Lock()
-	g.config = config
-	g.configMutex.Unlock()
+	g.UpdateConfig(config)
 }
 
 // UpdateConfig 更新配置
@@ -405,201 +629,65 @@ func (g *Gateway) UpdateConfig(config *model.GatewayConfig) {
 		g.routeMutex.Lock()
 		g.routeRules = config.RouteRules
 		g.routeMutex.Unlock()
+
+		// 更新熔断器配置
+		if config.CircuitBreaker != nil {
+			for serviceName, cbConfig := range config.CircuitBreaker.Services {
+				g.SetCircuitBreakerConfig(serviceName, &CircuitBreakerConfig{
+					CounterResetInterval: time.Duration(cbConfig.CounterResetInterval) * time.Second,
+					HalfOpenMaxSuccesses: cbConfig.HalfOpenMaxSuccesses,
+					FailureRateWindow:    cbConfig.FailureRateWindow,
+					FailureRateThreshold: cbConfig.FailureRateThreshold,
+				})
+			}
+		}
+
+		// 更新限流配置
+		if config.RateLimit != nil {
+			rlConfig := &RateLimitConfig{
+				DefaultRate:  config.RateLimit.DefaultRate,
+				DefaultBurst: config.RateLimit.DefaultBurst,
+				IPLimits: make(map[string]*struct {
+					Rate  float64
+					Burst int
+				}),
+				UALimits: make(map[string]*struct {
+					Rate  float64
+					Burst int
+				}),
+			}
+
+			// IP限制
+			for _, ipRule := range config.RateLimit.IPLimits {
+				rlConfig.IPLimits[ipRule.CIDR] = &struct {
+					Rate  float64
+					Burst int
+				}{
+					Rate:  ipRule.Rate,
+					Burst: ipRule.Burst,
+				}
+			}
+
+			// UA限制
+			for _, uaRule := range config.RateLimit.UALimits {
+				rlConfig.UALimits[uaRule.Pattern] = &struct {
+					Rate  float64
+					Burst int
+				}{
+					Rate:  uaRule.Rate,
+					Burst: uaRule.Burst,
+				}
+			}
+
+			g.SetRateLimitConfig(rlConfig)
+		}
+
+		// 更新认证配置
+		if config.Auth != nil {
+			g.clientID = config.Auth.ClientID
+			g.clientSecret = config.Auth.ClientSecret
+		}
 	}
-}
-
-// ServeHTTP 实现HTTP处理器接口
-// 处理所有进入网关的HTTP请求
-// 实现反向代理、负载均衡和熔断保护功能
-func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// 健康检查端点
-	if r.URL.Path == "/health" {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
-		return
-	}
-
-	// 限流检查
-	if !g.checkRateLimit(r) {
-		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
-		return
-	}
-
-	// --- 应用认证 ---
-	g.AuthHandler(func(w http.ResponseWriter, r *http.Request) {
-		// --- 原有的业务逻辑从这里开始 ---
-
-		startTime := time.Now()
-
-		// 匹配路由规则
-		rule := g.matchRoute(r.URL.Path)
-		var service, path string
-
-		if rule != nil {
-			// 应用路由规则
-			service, path = g.applyRouteRule(r, rule)
-		} else {
-			// 使用默认路由逻辑
-			// 1. 解析URL路径，提取服务名称
-			// 路径格式: /{service_name}/{real_path}
-			parts := strings.Split(r.URL.Path, "/")
-			if len(parts) < 2 {
-				http.Error(w, "invalid path", http.StatusBadRequest)
-				return
-			}
-
-			// 获取目标服务名称
-			// 第一个部分是服务名称
-			service = parts[1]
-
-			// 构造上游服务的真实路径
-			// 去掉服务名称部分，保留实际路径
-			path = "/" + strings.Join(parts[2:], "/")
-		}
-		log.Printf("[GW] 请求: %s %s\n", service, path)
-
-		// 通过服务发现获取服务实例地址
-		var target string
-		if g.useWeighted {
-			target = g.sd.GetWeightedService(service)
-		} else {
-			target = g.sd.GetService(service)
-		}
-
-		if target == "" {
-			http.Error(w, "service not found", http.StatusServiceUnavailable)
-			return
-		}
-
-		// 构造上游服务的完整URL
-		upstreamURL := "http://" + target + path
-
-		// 记录转发日志
-		log.Printf("Forwarding => %s (service: %s)", upstreamURL, service)
-
-		// 获取反向代理实例
-		proxy, err := g.proxyPool.GetProxy("http://" + target)
-		if err != nil {
-			http.Error(w, "invalid target", http.StatusBadGateway)
-			return
-		}
-
-		// 设置自定义传输器和超时
-		proxy.Transport = g.httpClient.Transport
-		proxy.FlushInterval = time.Millisecond * 100
-
-		// 修改Director以支持请求修改
-		originalDirector := proxy.Director
-		proxy.Director = func(req *http.Request) {
-			originalDirector(req)
-
-			// 设置正确的Host
-			url, _ := url.Parse("http://" + target)
-			req.Host = url.Host
-			req.URL.Host = url.Host
-			req.URL.Scheme = url.Scheme
-
-			// 应用路由规则中的请求修改
-			if rule != nil {
-				g.modifyRequest(req, rule)
-			}
-		}
-
-		// 2. 读取并重构请求体（避免二次读取内容为空）
-		// 由于请求体只能读取一次，需要将其内容读取到内存中
-		var bodyBytes []byte
-		if r.Body != nil {
-			bodyBytes, _ = io.ReadAll(r.Body)
-		}
-		// 重置请求体，允许后续读取
-		// 使用NopCloser包装Reader以满足io.ReadCloser接口
-		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-
-		// 3. 获取对应服务的熔断器
-		// 获取对应服务的熔断器
-		// 每个服务都有独立的熔断器，用于故障隔离
-		breaker := g.GetCircuitBreaker(service)
-
-		// 4. 将上游调用封装成函数，用于熔断器执行
-		// 将上游调用封装成函数，用于熔断器执行
-		// 熔断器通过执行此函数来监控服务状态
-		reqFunc := func() (interface{}, error) {
-			// 设置3秒上游调用超时
-			// 设置上游调用超时
-			// 防止因某个服务响应慢而阻塞整个网关
-			ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
-			defer cancel()
-
-			// 构建新的上游请求（带请求体）
-			// 使用原始请求的方法、URL和请求体
-			req, err := http.NewRequestWithContext(ctx, r.Method, upstreamURL, bytes.NewReader(bodyBytes))
-			if err != nil {
-				return nil, err
-			}
-			// 克隆原始请求，以实现流式转发并允许修改
-			outReq := r.Clone(ctx)
-			outReq.URL, _ = url.Parse(upstreamURL)
-			outReq.Host = target
-			outReq.RequestURI = "" // httpClient.Do 要求 RequestURI 为空
-
-			// 复制请求头
-			// 保留原始请求的所有头部信息
-			req.Header = r.Header.Clone()
-
-			// 应用路由规则中的请求修改
-			if rule != nil {
-
-				g.modifyRequest(outReq, rule)
-			}
-
-			// 执行上游请求
-			// 使用优化的HTTP客户端发起请求
-
-			resp, err := g.httpClient.Do(outReq)
-			if err != nil {
-				return nil, err
-			}
-
-			return resp, nil
-		}
-
-		// 5. 通过熔断器执行请求
-		// 通过熔断器执行请求
-		// 如果服务处于熔断状态或请求失败，熔断器会返回错误
-		result, err := breaker.Do(context.Background(), reqFunc)
-		if err != nil {
-			requestDuration := time.Since(startTime)
-			log.Printf("Circuit open or upstream failed for service=[%s], err=%v, duration=%v\n", service, err, requestDuration)
-			// 回退处理：可以自定义为缓存、默认值等
-			// 当前实现为返回503错误
-			http.Error(w, "service unavailable (circuit open or upstream error)", http.StatusServiceUnavailable)
-			return
-		}
-
-		// 6. 成功处理 - 返回上游响应
-		// 成功处理 - 返回上游响应
-		// 断言结果为HTTP响应类型
-		resp := result.(*http.Response)
-		defer resp.Body.Close()
-
-		// 复制响应头
-		// 将上游服务的响应头复制到网关响应中
-		for k, v := range resp.Header {
-			w.Header()[k] = v
-		}
-
-		// 设置响应状态码
-		// 使用上游服务返回的状态码
-		w.WriteHeader(resp.StatusCode)
-
-		// 复制响应体
-		// 将上游服务的响应体复制到网关响应中
-		io.Copy(w, resp.Body)
-
-		requestDuration := time.Since(startTime)
-
-		log.Printf("Request completed for service=[%s], status=%d, duration=%v\n", service, resp.StatusCode, requestDuration)
-	})(w, r)
 }
 
 // EnhancedHealthCheck 增强的健康检查

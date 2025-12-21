@@ -25,7 +25,8 @@ type ConsulRateLimitConfig struct {
 	UALimits []model.UALimitRule `yaml:"ua_limits" json:"ua_limits"`
 }
 
-// 初始化限流器管理器
+// NewLimiterManager 初始化限流器管理器
+// 已经弃用
 func NewLimiterManager(cfg *ConsulRateLimitConfig, defaultRate float64, defaultBurst int) (*LimiterManager, error) {
 	lm := &LimiterManager{
 		ipLimiters:     make(map[string]*rate.Limiter),
