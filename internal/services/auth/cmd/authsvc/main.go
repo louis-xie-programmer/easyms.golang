@@ -26,6 +26,7 @@ func main() {
 	// 读取 configs/app.yaml 配置文件
 	cfgStore, err := config.InitAppConfigStore()
 	if err != nil || cfgStore == nil {
+		// 在日志系统初始化前，只能用fmt
 		fmt.Printf("Failed to initialize app config store: %v\n", err)
 		panic(err)
 	}
@@ -33,7 +34,7 @@ func main() {
 	// 添加检查确保cfgStore不为空再访问其属性
 	discoveryClient, err := discovery.NewDiscovery(cfgStore.Consul.Host)
 	if err != nil {
-		logger.Error(err, "Failed to create consul client", serverName, nil)
+		fmt.Printf("Failed to create consul client: %v\n", err)
 		panic(err)
 	}
 
@@ -45,7 +46,7 @@ func main() {
 		provider = config.NewConsulConfig(discoveryClient, serverName, cfgStore.Consul.KeyPath, cfgStore.Env)
 		err := provider.LoadAppConfig()
 		if err != nil {
-			logger.Error(err, "Failed to load app config", serverName, nil)
+			fmt.Printf("Failed to load app config from consul: %v\n", err)
 			panic(err)
 		}
 		// 动态监听配置文件并更新服务
@@ -57,13 +58,16 @@ func main() {
 		provider = config.NewLocalConfig(serverName, cfgStore.Env)
 		err := provider.LoadAppConfig()
 		if err != nil {
-			logger.Error(err, "Failed to load local app config", serverName, nil)
+			fmt.Printf("Failed to load local app config: %v\n", err)
 			panic(err)
 		}
 	}
 
 	// 获取应用配置
 	appConfig := config.GetAppConfig()
+	if appConfig == nil {
+		panic("Application config is not loaded")
+	}
 
 	// 初始化日志系统
 	// 根据配置初始化日志系统（本地或Loki）
@@ -72,6 +76,7 @@ func main() {
 	if discoveryClient != nil {
 		err = discoveryClient.Register(serverName, appConfig.Server.Host, appConfig.Server.Port, nil)
 		if err != nil {
+			logger.Error(err, "Failed to register service with consul", serverName)
 			panic(err)
 		}
 
@@ -96,10 +101,10 @@ func main() {
 	var clientDetailsService service.ClientDetailsService
 
 	// 初始化JWT令牌增强器
-	// 支持密钥轮换：第一个是当前密钥，后续是旧密钥
-	tokenEnhancer = storage.NewJwtTokenEnhancer(
-		"new-super-secret-key-2024",
-	)
+	if appConfig.OAuth2.JWTSecret == "" {
+		panic("JWT secret is not configured")
+	}
+	tokenEnhancer = storage.NewJwtTokenEnhancer(appConfig.OAuth2.JWTSecret)
 
 	// 初始化数据库连接
 	// 根据配置连接到数据库
@@ -113,7 +118,7 @@ func main() {
 		appConfig.Database.Database), appConfig.Database)
 
 	if err != nil {
-		logger.Error(err, "Failed to connect to database", serverName, nil)
+		logger.Error(err, "Failed to connect to database", serverName)
 		panic(err)
 	}
 
@@ -121,10 +126,8 @@ func main() {
 	logger.Info(
 		"Attempting to connect to Redis",
 		serverName,
-		[][]string{
-			{"address", appConfig.Cache.Redis.Address},
-			{"db", fmt.Sprintf("%d", appConfig.Cache.Redis.DB)},
-		},
+		"address", appConfig.Cache.Redis.Address,
+		"db", appConfig.Cache.Redis.DB,
 	)
 	redisClient, err := db.NewEasyRedis(
 		&appConfig.Cache.Redis.Address,
@@ -137,21 +140,21 @@ func main() {
 
 	if err == nil {
 		// Redis连接成功
+		logger.Info("Successfully connected to Redis, using Redis for token store.", serverName)
 		tokenStore = storage.NewJwtTokenStore(
 			tokenEnhancer.(*storage.JwtTokenEnhancer),
 			dbase,
 			redisClient,
 		)
 	} else {
-		// ToDo: Redis连接失败 - 降级到其他存储(这里可以按照业务需求选择合适的存储方式)
+		// Redis连接失败 - 降级到仅使用数据库的模式
 		logger.Warn(
-			"Redis connection failed, falling back to db storage",
+			"Redis connection failed, falling back to DB-only token store",
 			serverName,
-			[][]string{
-				{"error", err.Error()},
-				{"address", appConfig.Cache.Redis.Address},
-			},
+			"error", err.Error(),
+			"address", appConfig.Cache.Redis.Address,
 		)
+		tokenStore = storage.NewJwtTokenStore(tokenEnhancer.(*storage.JwtTokenEnhancer), dbase, nil)
 	}
 	tokenService = service.NewTokenService(tokenStore, tokenEnhancer)
 
@@ -218,8 +221,8 @@ func main() {
 
 	// 启动 HTTP 服务
 	// 监听指定端口提供服务
-	fmt.Printf("Starting %s on port %d\n", serverName, appConfig.Server.Port)
+	logger.Info("Starting server", serverName, "port", appConfig.Server.Port)
 	if err := g.Run(fmt.Sprintf(":%d", appConfig.Server.Port)); err != nil {
-		logger.Error(err, "Failed to start HTTP server", serverName, nil)
+		logger.Error(err, "Failed to start HTTP server", serverName)
 	}
 }

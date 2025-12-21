@@ -122,17 +122,24 @@ func RegisterUserEndPoint(service service.UserDetailsService, authorities []stri
 			ctx.JSON(http.StatusBadRequest, gin.H{"error": "username and password are required"})
 			return
 		}
-		//
-		if clientDetail, ok := ctx.Value("OAuth2ClientDetailsKey").(model.ClientDetails); ok {
-			_, err := service.CreateUserDetails(req.Username, req.Password, authorities, clientDetail.ClientId)
-			if err != nil {
-				ctx.JSON(http.StatusBadRequest, gin.H{"error": "Failed to register user", "detail": err.Error()})
-				return
-			}
-			ctx.JSON(http.StatusOK, gin.H{"message": "User registered successfully"})
-		} else {
-			ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+
+		val, ok := ctx.Get(consts.OAuth2ClientDetailsKey)
+		if !ok {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: client details not found in context"})
+			return
 		}
+		clientDetail, ok := val.(*model.ClientDetails)
+		if !ok {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: client details have wrong type"})
+			return
+		}
+
+		_, err := service.CreateUserDetails(req.Username, req.Password, authorities, clientDetail.ClientId)
+		if err != nil {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": "Failed to register user", "detail": err.Error()})
+			return
+		}
+		ctx.JSON(http.StatusOK, gin.H{"message": "User registered successfully"})
 	}
 }
 
@@ -163,7 +170,16 @@ func LoginEndPoint(userDetailsService service.UserDetailsService, tokenService s
 			return
 		}
 
-		clientDetails, _ := c.Value(consts.OAuth2ClientDetailsKey).(*model.ClientDetails)
+		val, ok := c.Get(consts.OAuth2ClientDetailsKey)
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Client details not found in context, middleware may have failed"})
+			return
+		}
+		clientDetails, ok := val.(*model.ClientDetails)
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Client details in context have wrong type"})
+			return
+		}
 
 		token, err := tokenService.CreateAccessToken(&model.OAuth2Details{
 			User:   userDetails,

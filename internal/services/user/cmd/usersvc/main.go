@@ -154,7 +154,7 @@ func getUserAuthorizationToken(clientToken string) (string, string) {
 	// 设置请求头
 	req.Header.Set("Content-Type", "application/json")
 	// 设置客户端凭证
-	req.Header.Set("Authorization", clientToken)
+	req.Header.Set("Authorization", "Bearer "+clientToken)
 
 	// 发送请求
 	httpClient := &http.Client{}
@@ -219,7 +219,7 @@ func refreshUserToken(userToken, refreshToken string) string {
 	req.Header.Set("client_id", "user-svc")
 	req.Header.Set("client_secret", "user_secret")
 	// 使用用户访问令牌作为Authorization头
-	req.Header.Set("Authorization", userToken)
+	req.Header.Set("Authorization", "Bearer "+userToken)
 
 	// 发送请求
 	client := &http.Client{}
@@ -273,7 +273,7 @@ func refreshClientToken(clientToken, refreshToken string) string {
 	req.Header.Set("client_id", "user-svc")
 	req.Header.Set("client_secret", "user_secret")
 	// 使用客户端访问令牌作为Authorization头
-	req.Header.Set("Authorization", clientToken)
+	req.Header.Set("Authorization", "Bearer "+clientToken)
 
 	// 发送请求
 	client := &http.Client{}

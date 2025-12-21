@@ -5,106 +5,107 @@ import (
 	"easyms/internal/services/auth/internal/service"
 	model "easyms/internal/shared/models"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
 
-// MakeClientOnlyAuthorizationMiddleware 用于校验访问令牌是否为客户端凭证授权生成
+// parseAndSetDetails 是一个辅助函数，负责解析令牌并填充上下文
+func parseAndSetDetails(c *gin.Context, tokenService service.TokenService) error {
+	authHeader := c.GetHeader("Authorization")
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		return consts.ErrNullToken
+	}
+	tokenValue := strings.TrimPrefix(authHeader, "Bearer ")
+
+	oauth2Details, err := tokenService.GetOAuth2DetailsByAccessToken(tokenValue)
+	if err != nil {
+		return err
+	}
+
+	if oauth2Details != nil {
+		if oauth2Details.Client != nil {
+			c.Set(consts.OAuth2ClientDetailsKey, oauth2Details.Client)
+		}
+		if oauth2Details.User != nil {
+			c.Set(consts.OAuth2UserDetailsKey, oauth2Details.User)
+		}
+	}
+	return nil
+}
+
+// MakeSimpleClientMiddleware 用于校验客户端令牌
 func MakeSimpleClientMiddleware(tokenService service.TokenService) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		accessTokenValue := c.GetHeader("Authorization")
-		if accessTokenValue != "" {
-			// 获取令牌对应的详细信息
-			oauth2Details, err := tokenService.GetOAuth2DetailsByAccessToken(accessTokenValue)
-			if err != nil {
-				c.Set(consts.OAuth2ErrorKey, err)
-			}
-			if oauth2Details == nil || oauth2Details.Client == nil {
-				c.Set(consts.OAuth2ErrorKey, consts.ErrInvalidClient)
-			} else {
-				// 设置客户端详情到上下文中，以便后续使用
-				c.Set(consts.OAuth2ClientDetailsKey, oauth2Details.Client)
-
-				// 注意面向内部的公共接口是不需要用户的，但是如果用户存在，照样将添加到上下文中，以便后续使用（如日志）
-				if oauth2Details.User != nil {
-					c.Set(consts.OAuth2UserDetailsKey, oauth2Details.User)
-				}
-			}
-		} else {
-			c.Set(consts.OAuth2ErrorKey, consts.ErrNullToken)
-		}
-
-		//Todo: 权限验证逻辑，建议是单独封装一个权限验证中间件
-
-		if err, ok := c.Value(consts.OAuth2ErrorKey).(error); ok {
+		err := parseAndSetDetails(c, tokenService)
+		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
-		} else {
-			c.Next()
+			return
 		}
+
+		// 验证客户端信息是否存在
+		if _, exists := c.Get(consts.OAuth2ClientDetailsKey); !exists {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": consts.ErrInvalidClient.Error()})
+			return
+		}
+
+		c.Next()
 	}
 }
 
-// MakeAuthorityAuthorizationMiddleware 用于校验访问令牌是否包含指定权限
-// 校验用户权限
+// MakeAuthorityAuthorizationMiddleware 用于校验用户令牌
 func MakeAuthorityAuthorizationMiddleware(tokenService service.TokenService) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		accessTokenValue := c.GetHeader("Authorization")
-		if accessTokenValue != "" {
-			// 获取令牌对应的用户信息和客户端信息
-			oauth2Details, err := tokenService.GetOAuth2DetailsByAccessToken(accessTokenValue)
-			if err != nil {
-				c.Set(consts.OAuth2ErrorKey, err)
-			}
-			if oauth2Details == nil || oauth2Details.Client == nil {
-				c.Set(consts.OAuth2ErrorKey, consts.ErrInvalidClient)
-			} else {
-				// 设置客户端详情到上下文中，以便后续使用
-				c.Set(consts.OAuth2ClientDetailsKey, oauth2Details.Client)
-
-				if oauth2Details.User == nil {
-					c.Set(consts.OAuth2ErrorKey, consts.ErrInvalidUser)
-				} else {
-					c.Set(consts.OAuth2UserDetailsKey, oauth2Details.User)
-				}
-			}
-		} else {
-			c.Set(consts.OAuth2ErrorKey, consts.ErrNullToken)
-		}
-
-		if err, ok := c.Value(consts.OAuth2ErrorKey).(error); ok {
+		err := parseAndSetDetails(c, tokenService)
+		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
-		} else {
-			c.Next()
+			return
 		}
+
+		// 验证客户端和用户信息是否存在
+		if _, exists := c.Get(consts.OAuth2ClientDetailsKey); !exists {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": consts.ErrInvalidClient.Error()})
+			return
+		}
+		if _, exists := c.Get(consts.OAuth2UserDetailsKey); !exists {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": consts.ErrInvalidUser.Error()})
+			return
+		}
+
+		c.Next()
 	}
 }
 
 // MakeScopeHandler 用于校验访问令牌是否包含指定权限
 func MakeScopeHandler(scope string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 从上一个基本中间中件获取用户详情
-		userDetails, ok := c.Value(consts.OAuth2UserDetailsKey).(*model.UserDetails)
-		if !ok || userDetails == nil {
-			c.Set(consts.OAuth2ErrorKey, consts.ErrInvalidUser)
-		} else {
-			// 检查用户是否具有所需权限
-			userScopes := userDetails.GetAuthorities()
-			isAllow := false
-			for _, s := range userScopes {
-				if s == scope {
-					isAllow = true
-					break
-				}
-			}
-			if !isAllow {
-				c.Set(consts.OAuth2ErrorKey, consts.ErrInvalidScope)
+		userDetails, ok := c.Get(consts.OAuth2UserDetailsKey)
+		if !ok {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": consts.ErrInvalidUser.Error()})
+			return
+		}
+
+		user, ok := userDetails.(*model.UserDetails)
+		if !ok {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": consts.ErrInvalidUser.Error()})
+			return
+		}
+
+		// 检查用户是否具有所需权限
+		userScopes := user.GetAuthorities()
+		isAllow := false
+		for _, s := range userScopes {
+			if s == scope {
+				isAllow = true
+				break
 			}
 		}
 
-		if err, ok := c.Value(consts.OAuth2ErrorKey).(error); ok {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
-		} else {
-			c.Next()
+		if !isAllow {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": consts.ErrInvalidScope.Error()})
+			return
 		}
+
+		c.Next()
 	}
 }

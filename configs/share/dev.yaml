@@ -25,3 +25,5 @@ cache:
     # 缓存防护配置
     null_cache_expire: 60
     mutex_expire: 10
+oauth2:
+  jwt_secret: "a-secure-and-long-secret-key-for-dev"

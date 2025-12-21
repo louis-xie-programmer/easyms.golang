@@ -2,10 +2,13 @@ package service
 
 import (
 	"easyms/internal/shared/db"
+	"easyms/internal/shared/logger"
 	. "easyms/internal/shared/models"
 	"errors"
 	"fmt"
 	"strings"
+
+	"gorm.io/gorm"
 )
 
 var (
@@ -47,76 +50,70 @@ func NewPostgresUserDetailsService(db db.Database) UserDetailsService {
 //   - *UserDetails: 用户详情
 //   - error: 操作成功返回nil，失败返回具体错误
 func (service *PostgresUserDetailsService) LoadUserByUsername(username string) (*UserDetails, error) {
-	// 构造查询SQL
-	querySql := fmt.Sprintf("SELECT username, password_hash, authorities FROM user_details WHERE username = '%s'", username)
-
-	// 执行查询
 	var user UserDetails
-	err := service.db.Query(&user, querySql)
+	err := service.db.GetDB().Where("username = ?", username).First(&user).Error
 	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, ErrUserNotExist
+		}
+		logger.Error(err, "Failed to query user details", "auth-svc", "username", username)
 		return nil, err
 	}
-
-	// 构造用户详情对象
-	userDetails := &UserDetails{
-		Username:     user.Username,
-		PasswordHash: user.PasswordHash,
-		Authorities:  user.Authorities,
-	}
-
-	return userDetails, nil
+	return &user, nil
 }
 
 func (service *PostgresUserDetailsService) GetUserAllowedScopes(userId int64) []string {
-	// 从数据库中获取用户的权限scope
-	querySql := fmt.Sprintf("SELECT authorities FROM user_details WHERE user_id = %d", userId)
-
 	var user UserDetails
-	err := service.db.Query(&user, querySql)
+	err := service.db.GetDB().Select("authorities").Where("user_id = ?", userId).First(&user).Error
 	if err != nil {
+		logger.Error(err, "Failed to get user allowed scopes", "auth-svc", "userId", userId)
 		return []string{}
 	}
-
 	return user.GetAuthorities()
 }
 
 func (service *PostgresUserDetailsService) CreateUserDetails(username, password string, authorities []string, clientId string) (*UserDetails, error) {
-	// 校验用户是否存在
 	var count int64
-	err := service.db.GetDB().Table("user_details").Count(&count).Error
+	err := service.db.GetDB().Model(&UserDetails{}).Where("username = ?", username).Count(&count).Error
 	if err != nil {
-		fmt.Printf("查询失败: %v\n", err)
+		logger.Error(err, "Failed to check if user exists", "auth-svc", "username", username)
 		return nil, err
 	}
 	if count > 0 {
-		return nil, fmt.Errorf("用户已经存在")
+		return nil, fmt.Errorf("user %s already exists", username)
 	}
 
 	userDetails := &UserDetails{
-		Username:     username,
-		PasswordHash: password,
-		Authorities:  strings.Join(authorities, ","),
+		Username:    username,
+		Password:    password, // 临时存储明文
+		Authorities: strings.Join(authorities, ","),
 	}
 
-	err = userDetails.HashPassword()
-	if err != nil {
+	if err := userDetails.HashPassword(); err != nil {
+		logger.Error(err, "Failed to hash password", "auth-svc", "username", username)
 		return nil, err
 	}
-	userDetails.Password = ""
+	userDetails.Password = "" // 清除明文密码
 
-	err = service.db.Insert(userDetails)
-	if err != nil {
-		return nil, err
-	}
+	// 使用事务确保用户和权限关系的一致性
+	err = service.db.RunInTransaction(func(tx db.TxTransaction) error {
+		if err := tx.Insert(userDetails); err != nil {
+			return err
+		}
 
-	// 创建客户端与用户之间的关系
-	err = service.db.Insert(&UserAuthority{
-		UserID:   userDetails.UserId,
-		ClientID: clientId,
-		Scope:    userDetails.Authorities,
+		userAuthority := &UserAuthority{
+			UserID:   userDetails.UserId,
+			ClientID: clientId,
+			Scope:    userDetails.Authorities,
+		}
+		if err := tx.Insert(userAuthority); err != nil {
+			return err
+		}
+		return nil
 	})
 
 	if err != nil {
+		logger.Error(err, "Failed to create user and authority in transaction", "auth-svc", "username", username)
 		return nil, err
 	}
 

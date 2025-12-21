@@ -7,6 +7,7 @@ package storage
 
 import (
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
 
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt"
+	"gorm.io/gorm"
 )
 
 var (
@@ -53,6 +55,11 @@ type TokenStore interface {
 // 返回值:
 //   - TokenStore: 令牌存储实例
 func NewJwtTokenStore(jwtTokenEnhancer *JwtTokenEnhancer, db db.Database, redisClient *db.EasyRedis) TokenStore {
+	if db != nil {
+		if err := db.AutoMigrate(&RevokedToken{}); err != nil {
+			logger.Error(err, "Failed to auto-migrate RevokedToken table", "auth-svc")
+		}
+	}
 	return &JwtTokenStore{
 		jwtTokenEnhancer: jwtTokenEnhancer,
 		db:               db,
@@ -111,77 +118,56 @@ func (tokenStore *JwtTokenStore) ReadOAuth2Details(tokenValue string) (*OAuth2De
 	return oauth2Details, err
 }
 
-// RemoveAccessToken 移除存储的访问令牌
-// 实现JWT令牌的撤销功能，优先使用Redis，降级到数据库
-// 参数:
-//   - tokenValue: 令牌值
-func (tokenStore *JwtTokenStore) RemoveAccessToken(tokenValue string) {
+// revokeToken 封装了通用的令牌撤销逻辑
+func (tokenStore *JwtTokenStore) revokeToken(tokenValue string, prefix string) {
+	oauth2Token, _, err := tokenStore.jwtTokenEnhancer.Extract(tokenValue)
+	if err != nil {
+		logger.Warn("Failed to extract token for revocation", "auth-svc", "error", err)
+		return
+	}
+	// 计算剩余有效期
+	expiresIn := time.Until(*oauth2Token.ExpiresTime)
+	if expiresIn <= 0 {
+		return // 令牌已过期，无需撤销
+	}
+
 	// 优先使用Redis
 	if tokenStore.redis != nil {
-		// 使用哈希值缩短存储键长度
-		hash := getTokenHash(tokenValue) // 使用短哈希
-		oauth2Token, _, _ := tokenStore.jwtTokenEnhancer.Extract(tokenValue)
+		hash := getTokenHash(tokenValue)
 		err := tokenStore.redis.SetEx(
-			fmt.Sprintf("revoked:access:%s", hash),
+			fmt.Sprintf("revoked:%s:%s", prefix, hash),
 			"revoked",
-			int(time.Until(*oauth2Token.ExpiresTime).Seconds()),
+			int(expiresIn.Seconds()),
 		)
 		if err != nil {
-			logger.Error(err, "redis set failed", "auth-svc", nil)
+			logger.Error(err, "redis setex failed for token revocation", "auth-svc")
 		}
 		return
 	}
 
-	// 降级到数据库（保留兼容）
+	// 降级到数据库
 	if tokenStore.db != nil {
-		// 检查令牌是否已经在黑名单中
-		var count int64
-		err := tokenStore.db.GetDB().Model(&RevokedToken{}).Where("token_value = ?", tokenValue).Count(&count).Error
-
-		if err == nil && count == 0 {
-			// 令牌不在黑名单中，才进行解析和插入操作
-			revokedToken := &RevokedToken{
-				TokenValue: tokenValue,
-				Expiry:     time.Now().Add(24 * time.Hour), // 默认保留24小时
-				CreatedAt:  time.Now(),
-			}
-			// 插入撤销记录
-			err = tokenStore.db.Insert(revokedToken)
-			if err != nil {
-				// 如果插入失败，记录日志但继续执行
-				// 在实际应用中应该有更好的错误处理机制
-				logger.Error(err, "insert revoked_tokens table error: %v", "auth-svc", nil)
-			}
+		revokedToken := &RevokedToken{
+			TokenValue: tokenValue,
+			Expiry:     *oauth2Token.ExpiresTime,
+			CreatedAt:  time.Now(),
+		}
+		// 直接插入，忽略唯一键冲突错误
+		err := tokenStore.db.Insert(revokedToken)
+		if err != nil && !errors.Is(err, gorm.ErrDuplicatedKey) {
+			logger.Error(err, "insert into revoked_tokens table failed", "auth-svc")
 		}
 	}
 }
 
-// RemoveRefreshToken 移除存储的刷新令牌
-// 参数:
-//   - tokenValue: 令牌值
-func (tokenStore *JwtTokenStore) RemoveRefreshToken(tokenValue string) {
-	// JWT令牌是自包含的，撤销操作需要维护黑名单
-	if tokenStore.db != nil {
-		// 检查令牌是否已经在黑名单中
-		var count int64
-		err := tokenStore.db.GetDB().Model(&RevokedToken{}).Where("token_value = ?", tokenValue).Count(&count).Error
+// RemoveAccessToken 撤销访问令牌
+func (tokenStore *JwtTokenStore) RemoveAccessToken(tokenValue string) {
+	tokenStore.revokeToken(tokenValue, "access")
+}
 
-		if err == nil && count == 0 {
-			// 令牌不在黑名单中，才进行插入操作
-			revokedToken := &RevokedToken{
-				TokenValue: tokenValue,
-				Expiry:     time.Now().Add(24 * time.Hour), // 默认保留24小时
-				CreatedAt:  time.Now(),
-			}
-			// 插入撤销记录
-			err = tokenStore.db.Insert(revokedToken)
-			if err != nil {
-				// 如果插入失败，记录日志但继续执行
-				// 在实际应用中应该有更好的错误处理机制
-				logger.Error(err, "insert revoked_tokens table error: %v", "auth-svc", nil)
-			}
-		}
-	}
+// RemoveRefreshToken 撤销刷新令牌
+func (tokenStore *JwtTokenStore) RemoveRefreshToken(tokenValue string) {
+	tokenStore.revokeToken(tokenValue, "refresh")
 }
 
 // ReadOAuth2DetailsForRefreshToken 根据令牌值获取刷新令牌对应的客户端和用户信息
@@ -206,55 +192,44 @@ func (tokenStore *JwtTokenStore) ReadOAuth2DetailsForRefreshToken(tokenValue str
 	return oauth2Details, err
 }
 
-// IsAccessTokenRevoked 检查访问令牌是否被撤销
-// 参数:
-//   - tokenValue: 令牌值
-//
-// 返回值:
-//   - bool: 撤销返回true，否则返回false
-//   - error: 操作成功返回nil，失败返回具体错误
-func (tokenStore *JwtTokenStore) IsAccessTokenRevoked(tokenValue string) (bool, error) {
+// isTokenRevoked 封装了通用的检查令牌是否被撤销的逻辑
+func (tokenStore *JwtTokenStore) isTokenRevoked(tokenValue, prefix string) (bool, error) {
 	// 优先使用Redis
 	if tokenStore.redis != nil {
 		hash := getTokenHash(tokenValue)
-		val, err := tokenStore.redis.GetCache(fmt.Sprintf("revoked:access:%s", hash))
-		return val != "" && err == nil, nil
+		val, err := tokenStore.redis.GetCache(fmt.Sprintf("revoked:%s:%s", prefix, hash))
+		if err != nil && !errors.Is(err, sql.ErrNoRows) { // 假设redis client在未找到时返回类似sql.ErrNoRows的错误
+			logger.Error(err, "redis get failed for checking token revocation", "auth-svc")
+			// Redis 故障，降级到数据库
+		} else if err == nil && val != "" {
+			return true, nil
+		} else {
+			return false, nil // Redis中不存在
+		}
 	}
 
 	// 降级到数据库
 	if tokenStore.db != nil {
-		// 查询数据库检查令牌是否在撤销列表中
 		var count int64
 		err := tokenStore.db.GetDB().Model(&RevokedToken{}).Where("token_value = ?", tokenValue).Count(&count).Error
 		if err != nil {
+			logger.Error(err, "db query failed for checking token revocation", "auth-svc")
 			return false, err
 		}
 		return count > 0, nil
 	}
+
 	return false, nil
 }
 
+// IsAccessTokenRevoked 检查访问令牌是否被撤销
+func (tokenStore *JwtTokenStore) IsAccessTokenRevoked(tokenValue string) (bool, error) {
+	return tokenStore.isTokenRevoked(tokenValue, "access")
+}
+
 // IsRefreshTokenRevoked 检查刷新令牌是否被撤销
-// 参数:
-//   - tokenValue: 令牌值
-//
-// 返回值:
-//   - bool: 撤销返回true，否则返回false
-//   - error: 操作成功返回nil，失败返回具体错误
 func (tokenStore *JwtTokenStore) IsRefreshTokenRevoked(tokenValue string) (bool, error) {
-	if tokenStore.db == nil {
-		// 没有数据库支持，无法检查撤销状态
-		return false, nil
-	}
-
-	// 查询数据库检查令牌是否在撤销列表中
-	var count int64
-	err := tokenStore.db.GetDB().Model(&RevokedToken{}).Where("token_value = ?", tokenValue).Count(&count).Error
-	if err != nil {
-		return false, err
-	}
-
-	return count > 0, nil
+	return tokenStore.isTokenRevoked(tokenValue, "refresh")
 }
 
 // TokenEnhancer 令牌增强器接口

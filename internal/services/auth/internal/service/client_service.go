@@ -2,10 +2,12 @@ package service
 
 import (
 	"easyms/internal/shared/db"
+	"easyms/internal/shared/logger"
 	. "easyms/internal/shared/models"
 	"fmt"
 
 	"github.com/gofrs/uuid"
+	"gorm.io/gorm"
 )
 
 // ClientDetailsService 客户端详情服务接口
@@ -40,33 +42,16 @@ func NewPostgresClientDetailsService(db db.Database) ClientDetailsService {
 //   - *ClientDetails: 客户端详情
 //   - error: 操作成功返回nil，失败返回具体错误
 func (service *PostgresClientDetailsService) LoadClientByClientId(clientId string) (*ClientDetails, error) {
-	// 构造查询SQL
-	querySql := fmt.Sprintf("SELECT client_id, client_secret, access_token_validity_seconds, refresh_token_validity_seconds,"+
-		"registered_redirect_uri, authorized_grant_types, allowed_scopes, default_scope FROM client_details WHERE client_id = '%s'", clientId)
-
-	// 执行查询
 	var client ClientDetails
-
-	err := service.db.Query(&client, querySql)
+	err := service.db.GetDB().Where("client_id = ?", clientId).First(&client).Error
 	if err != nil {
-		fmt.Printf("sql: %s\n", querySql)
-		fmt.Printf("查询失败: %v\n", err)
+		if err == gorm.ErrRecordNotFound {
+			return nil, fmt.Errorf("client with id %s not found", clientId)
+		}
+		logger.Error(err, "Failed to query client details", "auth-svc", "clientId", clientId)
 		return nil, err
 	}
-
-	// 构造客户端详情对象
-	clientDetails := &ClientDetails{
-		ClientId:                    client.ClientId,
-		ClientSecret:                client.ClientSecret,
-		AccessTokenValiditySeconds:  client.AccessTokenValiditySeconds,
-		RefreshTokenValiditySeconds: client.RefreshTokenValiditySeconds,
-		RegisteredRedirectUri:       client.RegisteredRedirectUri,
-		AuthorizedGrantTypes:        client.AuthorizedGrantTypes,
-		AllowedAuthorities:          client.AllowedAuthorities,
-		DefaultAuthorities:          client.DefaultAuthorities,
-	}
-
-	return clientDetails, nil
+	return &client, nil
 }
 
 const (
@@ -83,6 +68,16 @@ const (
 )
 
 func (service *PostgresClientDetailsService) CreateClientDetails(clientId string) (*ClientDetails, error) {
+	var count int64
+	err := service.db.GetDB().Model(&ClientDetails{}).Where("client_id = ?", clientId).Count(&count).Error
+	if err != nil {
+		logger.Error(err, "Failed to check if client exists", "auth-svc", "clientId", clientId)
+		return nil, err
+	}
+	if count > 0 {
+		return nil, fmt.Errorf("client with id %s already exists", clientId)
+	}
+
 	clientDetails := ClientDetails{
 		ClientId:                    clientId,
 		ClientSecret:                CreateClientSecret(),
@@ -93,20 +88,9 @@ func (service *PostgresClientDetailsService) CreateClientDetails(clientId string
 		DefaultAuthorities:          DefaultDefaultAuthorities,
 	}
 
-	// 验证客户端信息是否已经存在
-	var count int64
-	err := service.db.GetDB().Table("client_details").Count(&count).Error
-
-	if err != nil {
-		fmt.Printf("查询失败: %v\n", err)
-		return nil, err
-	}
-	if count > 0 {
-		return nil, fmt.Errorf("客户端信息已存在")
-	}
 	err = service.db.Insert(&clientDetails)
 	if err != nil {
-		fmt.Printf("插入失败: %v\n", err)
+		logger.Error(err, "Failed to insert new client", "auth-svc", "clientId", clientId)
 		return nil, err
 	}
 
