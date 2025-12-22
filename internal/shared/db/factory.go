@@ -30,6 +30,26 @@ func NewDatabaseFactory() DatabaseFactory {
 	return &DefaultDatabaseFactory{}
 }
 
+// createGormDB 是一个辅助函数，用于创建和配置 gorm.DB 实例
+func createGormDB(dialector gorm.Dialector, dbType string) (*gorm.DB, error) {
+	config := &gorm.Config{
+		SkipDefaultTransaction:                   true,
+		DisableForeignKeyConstraintWhenMigrating: true,
+	}
+
+	db, err := gorm.Open(dialector, config)
+	if err != nil {
+		return nil, err
+	}
+
+	// 注册我们的指标插件
+	if err := db.Use(&MetricsPlugin{DBType: dbType}); err != nil {
+		return nil, err
+	}
+
+	return db, nil
+}
+
 // CreateDatabase 创建新的数据库实例
 // 根据数据库类型创建相应的数据库连接
 // 参数:
@@ -54,14 +74,8 @@ func (f *DefaultDatabaseFactory) CreateDatabase(dbType string, connStr string) (
 		return nil, fmt.Errorf("unsupported database type: %s", dbType)
 	}
 
-	// 为 PostgreSQL 配置更好的数组支持
-	config := &gorm.Config{
-		SkipDefaultTransaction:                   true,
-		DisableForeignKeyConstraintWhenMigrating: true,
-	}
-
-	// 创建数据库连接
-	db, err := gorm.Open(dialector, config)
+	// 创建数据库连接并注册插件
+	db, err := createGormDB(dialector, dbType)
 	if err != nil {
 		return nil, err
 	}
@@ -102,14 +116,8 @@ func (f *DefaultDatabaseFactory) CreateDatabaseWithPool(dbType string, connStr s
 		return nil, fmt.Errorf("unsupported database type: %s", dbType)
 	}
 
-	// 为 PostgreSQL 配置更好的数组支持
-	config := &gorm.Config{
-		SkipDefaultTransaction:                   true,
-		DisableForeignKeyConstraintWhenMigrating: true,
-	}
-
-	// 创建数据库连接
-	db, err := gorm.Open(dialector, config)
+	// 创建数据库连接并注册插件
+	db, err := createGormDB(dialector, dbType)
 	if err != nil {
 		return nil, err
 	}
@@ -215,14 +223,8 @@ func (f *DefaultDatabaseFactory) createSingleDatabase(config DatabaseConfig) (Da
 		return nil, fmt.Errorf("unsupported database type: %s", config.Type)
 	}
 
-	// 配置
-	gormConfig := &gorm.Config{
-		SkipDefaultTransaction:                   true,
-		DisableForeignKeyConstraintWhenMigrating: true,
-	}
-
-	// 创建数据库连接
-	gormDB, err := gorm.Open(dialector, gormConfig)
+	// 创建数据库连接并注册插件
+	gormDB, err := createGormDB(dialector, config.Type)
 	if err != nil {
 		return nil, err
 	}
