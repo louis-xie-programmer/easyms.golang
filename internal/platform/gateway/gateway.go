@@ -9,6 +9,7 @@ package gateway
 import (
 	"bytes"
 	"context"
+	pb "easyms/api/proto/auth"
 	"easyms/internal/platform/gateway/internal/domain/model"
 	"fmt"
 	"io"
@@ -31,6 +32,8 @@ import (
 
 	"easyms/internal/shared/discovery"
 	"easyms/internal/shared/logger"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 // Middleware 定义了中间件类型
@@ -126,6 +129,7 @@ type Gateway struct {
 	clientID        string
 	clientSecret    string
 	middlewares     []Middleware
+	authSvcClient   pb.AuthServiceClient
 }
 
 // NewGateway 创建新的API网关实例
@@ -146,6 +150,16 @@ func NewGateway(sd *discovery.ServiceDiscovery) *Gateway {
 	httpClient := &http.Client{
 		Transport: transport,
 		Timeout:   30 * time.Second,
+	}
+
+	// 创建到 auth-svc 的 gRPC 连接
+	// 注意：这里的地址应该是通过服务发现动态获取的
+	// 并且应该使用带负载均衡的 gRPC 连接
+	// 暂时硬编码 gRPC 端口为 HTTP 端口 + 10000
+	authSvcAddr := "localhost:20000" // 假设 auth-svc 的 HTTP 端口是 10000
+	conn, err := grpc.Dial(authSvcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithDefaultServiceConfig(`{"loadBalancingPolicy":"round_robin"}`))
+	if err != nil {
+		log.Fatalf("Failed to connect to auth-svc via gRPC: %v", err)
 	}
 
 	gateway := &Gateway{
@@ -169,8 +183,9 @@ func NewGateway(sd *discovery.ServiceDiscovery) *Gateway {
 				Burst int
 			}),
 		},
-		authCache:   cache.New(5*time.Minute, 10*time.Minute),
-		middlewares: make([]Middleware, 0),
+		authCache:     cache.New(5*time.Minute, 10*time.Minute),
+		middlewares:   make([]Middleware, 0),
+		authSvcClient: pb.NewAuthServiceClient(conn),
 	}
 
 	gateway.cbConfig["default"] = &CircuitBreakerConfig{
@@ -213,35 +228,16 @@ func (g *Gateway) AuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		authTarget := g.sd.GetService("auth-svc")
-		if authTarget == "" {
-			logger.Error(nil, "auth-svc not found in service discovery", "gateway", "path", r.URL.Path)
-			http.Error(w, `{"error": "authentication service unavailable"}`, http.StatusInternalServerError)
-			return
-		}
-
-		verifyURL := fmt.Sprintf("http://%s/oauth2/verify", authTarget)
-		req, err := http.NewRequestWithContext(r.Context(), "POST", verifyURL, nil)
-		if err != nil {
-			http.Error(w, `{"error": "failed to create request"}`, http.StatusInternalServerError)
-			return
-		}
-
-		req.Header.Set("Authorization", "Bearer "+tokenStr)
-		req.SetBasicAuth(g.clientID, g.clientSecret)
-
-		resp, err := g.httpClient.Do(req)
-		if err != nil || resp.StatusCode != http.StatusOK {
+		// 使用 gRPC 客户端进行验证
+		resp, err := g.authSvcClient.VerifyToken(r.Context(), &pb.VerifyRequest{Token: tokenStr})
+		if err != nil || !resp.Valid {
 			msg := "invalid or expired token"
 			if err != nil {
-				logger.Warn("Auth verification failed", "gateway", "service", "auth-svc", "error", err)
-			} else {
-				logger.Warn("Auth verification failed", "gateway", "service", "auth-svc", "status", resp.StatusCode)
+				logger.Warn("Auth verification failed via gRPC", "gateway", "error", err)
 			}
 			http.Error(w, fmt.Sprintf(`{"error": "%s"}`, msg), http.StatusUnauthorized)
 			return
 		}
-		defer resp.Body.Close()
 
 		g.authCache.Set(tokenStr, true, 5*time.Minute)
 		next.ServeHTTP(w, r)

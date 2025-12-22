@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+package auth;
+
+// 关键修正：import路径应该是相对于-I参数指定的目录，而不是项目根目录
+import "google/api/annotations.proto";
+
+option go_package = "easyms.golang/api/proto/auth";
+
+// -----------------
+// 消息体定义
+// -----------------
+
+message UserDetails {
+    int64 user_id = 1;
+    string username = 2;
+    string authorities = 3;
+}
+
+message ClientDetails {
+    string client_id = 1;
+    int32 access_token_validity_seconds = 2;
+    int32 refresh_token_validity_seconds = 3;
+    string authorized_grant_types = 4;
+}
+
+message TokenRequest {
+    string grant_type = 1;
+    string username = 2;
+    string password = 3;
+    string refresh_token = 4;
+    string client_id = 5;
+    string client_secret = 6;
+}
+
+message TokenResponse {
+    string access_token = 1;
+    string token_type = 2;
+    int64 expires_in = 3;
+    string refresh_token = 4;
+}
+
+message VerifyRequest {
+    string token = 1;
+}
+
+message VerifyResponse {
+    bool valid = 1;
+    UserDetails user = 2;
+    ClientDetails client = 3;
+}
+
+// -----------------
+// 服务定义
+// -----------------
+
+service AuthService {
+    // 对应 /oauth2/token 和 /login 接口
+    rpc GrantToken(TokenRequest) returns (TokenResponse) {
+        option (google.api.http) = {
+            post: "/v1/auth/token"
+            body: "*"
+        };
+    }
+
+    // 对应 /oauth2/verify 接口
+    rpc VerifyToken(VerifyRequest) returns (VerifyResponse) {
+        option (google.api.http) = {
+            post: "/v1/auth/verify"
+            body: "*"
+        };
+    }
+}

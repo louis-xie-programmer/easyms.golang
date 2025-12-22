@@ -2,6 +2,8 @@
 package main
 
 import (
+	"context"
+	pb "easyms/api/proto/auth"
 	"easyms/internal/services/auth/internal/handles"
 	"easyms/internal/services/auth/internal/middleware"
 	"easyms/internal/services/auth/internal/service"
@@ -11,8 +13,12 @@ import (
 	"easyms/internal/shared/discovery"
 	"easyms/internal/shared/logger"
 	"fmt"
+	"net"
 
 	"github.com/gin-gonic/gin"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 // main 认证服务主函数
@@ -171,9 +177,49 @@ func main() {
 		"refresh_token":      service.NewRefreshGranter("refresh_token", tokenService),
 	})
 
+	// 启动 gRPC 服务器 (在一个新的 goroutine 中)
+	grpcPort := appConfig.Server.Port + 10000
+	go func() {
+		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", grpcPort))
+		if err != nil {
+			logger.Error(err, "Failed to listen for gRPC", serverName)
+			panic(err)
+		}
+
+		s := grpc.NewServer()
+		// 创建并注册 gRPC 服务实现
+		pb.RegisterAuthServiceServer(s, service.NewGrpcServer(tokenGranter, tokenService, clientDetailsService))
+
+		logger.Info("gRPC server listening", serverName, "address", lis.Addr().String())
+		if err := s.Serve(lis); err != nil {
+			logger.Error(err, "Failed to serve gRPC", serverName)
+		}
+	}()
+
 	// 启动 HTTP 服务
 	// 使用Gin框架启动HTTP服务
 	g := gin.Default()
+
+	// 启动 gRPC-Gateway 反向代理
+	go func() {
+		ctx := context.Background()
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		mux := runtime.NewServeMux()
+		opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+		// 注册 gRPC-Gateway 处理器
+		err := pb.RegisterAuthServiceHandlerFromEndpoint(ctx, mux, fmt.Sprintf("localhost:%d", grpcPort), opts)
+		if err != nil {
+			logger.Error(err, "Failed to register gRPC-Gateway", serverName)
+			return
+		}
+
+		// 将 gRPC-Gateway 的 mux 作为 Gin 的一个路由
+		// 注意：这里使用 Any 匹配所有 /v1/ 开头的请求
+		g.Any("/v1/*any", gin.WrapH(mux))
+		logger.Info("gRPC-Gateway initialized", serverName, "path", "/v1/*")
+	}()
 
 	// 初始化健康检查组件
 	healthChecker := service.NewHealthCheckerService(dbase)

@@ -564,3 +564,41 @@ docker-compose up -d
 ## 十八、贡献指南
 
 欢迎提交 Issue 和 Pull Request 来改进项目。
+
+
+# 安装Buf工具链
+brew install bufbuild/buf/buf  # MacOS
+# 或使用官方安装脚本
+curl -sSL https://buf.build/install | bash
+
+# 安装必要的Go插件
+go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+
+go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-grpc-gateway@latest
+go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-openapiv2@latest
+
+# windows 最佳安装方法 下载 protoc
+下载地址：https://github.com/protocolbuffers/protobuf/releases/
+拷贝到 $(go env GOMODCACHE) 如：D:/app/go/
+
+git clone https://github.com/googleapis/googleapis third_party/googleapis
+
+
+protoc -I . \
+-I third_party/googleapis \
+-I "D:/app/go/include" \
+--go_out=. --go_opt=paths=source_relative \
+--go-grpc_out=. --go-grpc_opt=paths=source_relative \
+api/proto/auth/auth.proto
+
+protoc -I . \
+-I third_party/googleapis \
+-I "D:/app/go/include" \
+--go_out . --go_opt paths=source_relative \
+--go-grpc_out . --go-grpc_opt paths=source_relative \
+--grpc-gateway_out . \
+--grpc-gateway_opt paths=source_relative \
+--grpc-gateway_opt generate_unbound_methods=true \
+--openapiv2_out . --openapiv2_opt logtostderr=true \
+api/proto/auth/auth.proto
