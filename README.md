@@ -584,7 +584,6 @@ go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-openapiv2@latest
 
 git clone https://github.com/googleapis/googleapis third_party/googleapis
 
-
 protoc -I . \
 -I third_party/googleapis \
 -I "D:/app/go/include" \
@@ -602,3 +601,5 @@ protoc -I . \
 --grpc-gateway_opt generate_unbound_methods=true \
 --openapiv2_out . --openapiv2_opt logtostderr=true \
 api/proto/auth/auth.proto
+
+

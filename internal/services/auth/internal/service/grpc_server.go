@@ -2,7 +2,7 @@ package service
 
 import (
 	"context"
-	pb "easyms/api/proto/auth"
+	auth2 "easyms/api/proto/auth"
 	"easyms/internal/services/auth/internal/consts"
 	shared_model "easyms/internal/shared/models"
 	"google.golang.org/grpc/codes"
@@ -12,14 +12,14 @@ import (
 
 // grpcServer 实现了 AuthService gRPC 服务。
 type grpcServer struct {
-	pb.UnimplementedAuthServiceServer // 必须嵌入，以保证向前兼容
-	tokenGranter                      TokenGranter
-	tokenService                      TokenService
-	clientDetailsService              ClientDetailsService
+	auth2.UnimplementedAuthServiceServer // 必须嵌入，以保证向前兼容
+	tokenGranter                         TokenGranter
+	tokenService                         TokenService
+	clientDetailsService                 ClientDetailsService
 }
 
 // NewGrpcServer 创建一个新的 gRPC 服务实例。
-func NewGrpcServer(tg TokenGranter, ts TokenService, cs ClientDetailsService) pb.AuthServiceServer {
+func NewGrpcServer(tg TokenGranter, ts TokenService, cs ClientDetailsService) auth2.AuthServiceServer {
 	return &grpcServer{
 		tokenGranter:         tg,
 		tokenService:         ts,
@@ -28,7 +28,7 @@ func NewGrpcServer(tg TokenGranter, ts TokenService, cs ClientDetailsService) pb
 }
 
 // GrantToken 实现了 gRPC 的 GrantToken 方法。
-func (s *grpcServer) GrantToken(ctx context.Context, req *pb.TokenRequest) (*pb.TokenResponse, error) {
+func (s *grpcServer) GrantToken(ctx context.Context, req *auth2.TokenRequest) (*auth2.TokenResponse, error) {
 	// 1. 验证客户端信息
 	clientDetails, err := s.clientDetailsService.LoadClientByClientId(req.ClientId)
 	if err != nil {
@@ -54,7 +54,7 @@ func (s *grpcServer) GrantToken(ctx context.Context, req *pb.TokenRequest) (*pb.
 	}
 
 	// 4. 将结果转换为 gRPC 响应
-	return &pb.TokenResponse{
+	return &auth2.TokenResponse{
 		AccessToken:  oauth2Token.TokenValue,
 		TokenType:    "Bearer",
 		ExpiresIn:    int64(oauth2Token.ExpiresTime.Sub(context.Background().Value("now").(time.Time)).Seconds()),
@@ -63,16 +63,16 @@ func (s *grpcServer) GrantToken(ctx context.Context, req *pb.TokenRequest) (*pb.
 }
 
 // VerifyToken 实现了 gRPC 的 VerifyToken 方法。
-func (s *grpcServer) VerifyToken(ctx context.Context, req *pb.VerifyRequest) (*pb.VerifyResponse, error) {
+func (s *grpcServer) VerifyToken(ctx context.Context, req *auth2.VerifyRequest) (*auth2.VerifyResponse, error) {
 	oauth2Details, err := s.tokenService.GetOAuth2DetailsByAccessToken(req.Token)
 	if err != nil {
-		return &pb.VerifyResponse{Valid: false}, nil
+		return &auth2.VerifyResponse{Valid: false}, nil
 	}
 
 	// 转换 UserDetails
-	var userDetails *pb.UserDetails
+	var userDetails *auth2.UserDetails
 	if oauth2Details.User != nil {
-		userDetails = &pb.UserDetails{
+		userDetails = &auth2.UserDetails{
 			UserId:      oauth2Details.User.UserId,
 			Username:    oauth2Details.User.Username,
 			Authorities: oauth2Details.User.Authorities,
@@ -80,9 +80,9 @@ func (s *grpcServer) VerifyToken(ctx context.Context, req *pb.VerifyRequest) (*p
 	}
 
 	// 转换 ClientDetails
-	var clientDetails *pb.ClientDetails
+	var clientDetails *auth2.ClientDetails
 	if oauth2Details.Client != nil {
-		clientDetails = &pb.ClientDetails{
+		clientDetails = &auth2.ClientDetails{
 			ClientId:                    oauth2Details.Client.ClientId,
 			AccessTokenValiditySeconds:  int32(oauth2Details.Client.AccessTokenValiditySeconds),
 			RefreshTokenValiditySeconds: int32(oauth2Details.Client.RefreshTokenValiditySeconds),
@@ -90,7 +90,7 @@ func (s *grpcServer) VerifyToken(ctx context.Context, req *pb.VerifyRequest) (*p
 		}
 	}
 
-	return &pb.VerifyResponse{
+	return &auth2.VerifyResponse{
 		Valid:  true,
 		User:   userDetails,
 		Client: clientDetails,

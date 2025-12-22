@@ -14,9 +14,12 @@ import (
 	"easyms/internal/shared/logger"
 	"fmt"
 	"net"
+	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -221,6 +224,12 @@ func main() {
 		logger.Info("gRPC-Gateway initialized", serverName, "path", "/v1/*")
 	}()
 
+	// 设置 Swagger UI
+	// 1. 提供 swagger.json 文件服务
+	g.StaticFile("/swagger.json", "./api/proto/auth/auth.swagger.json")
+	// 2. 提供 Swagger UI 界面，并告诉它去哪里加载 swagger.json
+	g.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler, ginSwagger.URL("/swagger.json")))
+
 	// 初始化健康检查组件
 	healthChecker := service.NewHealthCheckerService(dbase)
 	// 健康检查端点
@@ -259,7 +268,7 @@ func main() {
 		middleware.MakeAuthorityAuthorizationMiddleware(tokenService),
 		middleware.MakeScopeHandler("admin"),
 		func(ctx *gin.Context) {
-			ctx.JSON(200, gin.H{
+			ctx.JSON(http.StatusOK, gin.H{
 				"message": "Hello Admin!",
 			})
 		},
