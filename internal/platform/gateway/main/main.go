@@ -27,25 +27,26 @@ func main() {
 	// 读取 configs/app.yaml 配置文件
 	cfgStore, err := config.InitAppConfigStore()
 	if err != nil {
-		logger.Error(err, "Failed to initialize app config store", serverName, nil)
+		logger.Error(err, "Failed to initialize app config store", serverName)
 	}
 
 	// 初始化 Consul 服务发现客户端
 	// 连接到Consul服务注册与发现中心
 	sd, err := discovery.NewServiceDiscovery(cfgStore.Consul.Host)
 	if err != nil {
-		logger.Error(err, "Failed to create consul client", serverName, nil)
+		logger.Error(err, "Failed to create consul client", serverName)
 	}
 
 	// 监听多个服务的变化
 	// 启动goroutine监听user-svc和auth-svc服务实例变化
 	sd.WatchService("user-svc")
 	sd.WatchService("auth-svc")
+	sd.WatchService("order-svc") // 新增对订单服务的监听
 
 	// 创建 Discovery 客户端用于配置加载
 	discoveryClient, err := discovery.NewDiscovery(cfgStore.Consul.Host)
 	if err != nil {
-		logger.Error(err, "Failed to create consul discovery client", serverName, nil)
+		logger.Error(err, "Failed to create consul discovery client", serverName)
 	}
 
 	var provider config.AppConfigProvider
@@ -58,7 +59,7 @@ func main() {
 		provider = config.NewConsulConfig(discoveryClient, serverName, cfgStore.Consul.KeyPath, cfgStore.Env)
 		err := provider.LoadAppConfig()
 		if err != nil {
-			logger.Error(err, "Failed to load app config", serverName, nil)
+			logger.Error(err, "Failed to load app config", serverName)
 			panic(err)
 		}
 		// 动态监听配置文件并更新服务
@@ -70,7 +71,7 @@ func main() {
 		provider = config.NewLocalConfig(serverName, cfgStore.Env)
 		err := provider.LoadAppConfig()
 		if err != nil {
-			logger.Error(err, "Failed to load local app config", serverName, nil)
+			logger.Error(err, "Failed to load local app config", serverName)
 			panic(err)
 		}
 	}
@@ -91,8 +92,8 @@ func main() {
 
 	// 启动HTTP服务
 	// 启动网关HTTP服务，监听指定端口
-	fmt.Printf("Starting %s on port %d\n", serverName, port)
+	logger.Info("Starting gateway server", serverName, "port", port)
 	if err := http.ListenAndServe(fmt.Sprintf(":%d", port), gw); err != nil {
-		fmt.Printf("Failed to start %s: %v\n", serverName, err)
+		logger.Error(err, "Failed to start gateway server", serverName)
 	}
 }

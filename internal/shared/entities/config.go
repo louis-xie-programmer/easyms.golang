@@ -32,6 +32,7 @@ type AppConfig struct {
 	Loki     LokiConfig     `yaml:"loki,omitempty"`
 	Server   ServerConfig   `yaml:"server,omitempty"`
 	Database DatabaseConfig `yaml:"database,omitempty"`
+	RabbitMQ RabbitMQConfig `yaml:"rabbitmq,omitempty"`
 
 	// 添加配置锁，防止并发读写
 	ConfigLock sync.RWMutex `yaml:"-"`
@@ -103,6 +104,11 @@ type DatabaseConfig struct {
 	MaxOpenConns    int `yaml:"max_open_conns"`     // 最大打开连接数
 	ConnMaxLifetime int `yaml:"conn_max_lifetime"`  // 连接最大生命周期(秒)
 	ConnMaxIdleTime int `yaml:"conn_max_idle_time"` // 连接最大空闲时间(秒)
+}
+
+// RabbitMQConfig 定义 RabbitMQ 配置
+type RabbitMQConfig struct {
+	URL string `yaml:"url"`
 }
 
 // ConfigVersion 配置版本信息

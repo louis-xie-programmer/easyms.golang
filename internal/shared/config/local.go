@@ -155,6 +155,10 @@ func mergoConfig(dst, src *entities.AppConfig) error {
 		}
 	}
 
+	if dst.RabbitMQ == (entities.RabbitMQConfig{}) {
+		dst.RabbitMQ = src.RabbitMQ
+	}
+
 	// Server配置通常来自服务特定配置文件，不需要合并
 
 	return nil

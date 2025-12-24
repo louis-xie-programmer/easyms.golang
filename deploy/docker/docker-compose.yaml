@@ -5,6 +5,23 @@ networks:
     driver: bridge
 
 services:
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"   # AMQP port for services
+      - "15672:15672" # Management UI
+    networks:
+      - easy-network
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   auth-svc:
     container_name: auth-svc
     build:
@@ -13,9 +30,11 @@ services:
     environment:
       POSTGRES_DSN: postgres://easy:easypass@easy-db:5432/easydb?sslmode=disable
       CONSUL_ADDR: consul:8500
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
     depends_on:
       - easy-db
       - consul
+      - rabbitmq
 
   user-svc:
     container_name: user-svc
@@ -25,9 +44,11 @@ services:
     environment:
       POSTGRES_DSN: postgres://easy:easypass@easy-db:5432/easydb?sslmode=disable
       CONSUL_ADDR: consul:8500
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
     depends_on:
       - easy-db
       - consul
+      - rabbitmq
 
   api-gateway:
     container_name: api-gateway

@@ -27,3 +27,5 @@ cache:
     mutex_expire: 10
 oauth2:
   jwt_secret: "a-secure-and-long-secret-key-for-dev"
+rabbitmq:
+  url: "amqp://guest:guest@172.29.16.1:5672/"

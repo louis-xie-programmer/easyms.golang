@@ -1,0 +1,3 @@
+server:
+  host: "localhost"
+  port: 10002 # 为订单服务分配一个新端口

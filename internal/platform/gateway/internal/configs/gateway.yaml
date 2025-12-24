@@ -3,18 +3,12 @@ gateway:
     - service_name: "user-svc"
       path_prefix: "/api/users"
       strip_prefix: true
-      path_rewrite: "^/([^/]+)(/.*)?$"
-      rewrite_target: "$2"
-      add_headers:
-        X-Forwarded-By: "api-gateway"
-        X-Original-Path: "{{.RequestPath}}"
-      remove_headers:
-        - "X-Internal-Header"
     - service_name: "auth-svc"
       path_prefix: "/api/auth"
       strip_prefix: true
-      add_headers:
-        X-Forwarded-By: "api-gateway"
+    - service_name: "order-svc"
+      path_prefix: "/api/v1/orders"
+      strip_prefix: true
 
   rate_limit:
     default_rate: 100
