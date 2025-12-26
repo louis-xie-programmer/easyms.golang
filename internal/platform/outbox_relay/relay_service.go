@@ -1,16 +1,19 @@
-package service
+package outbox_relay
 
 import (
 	"context"
 	"easyms/internal/shared/db"
 	"easyms/internal/shared/logger"
-	. "easyms/internal/shared/models"
+	"easyms/internal/shared/models"
 	"easyms/internal/shared/mq"
-	"github.com/google/uuid"
 	"time"
+
+	"github.com/google/uuid"
 )
 
-// RelayService 负责轮询发件箱表并将事件转发到消息队列
+const componentName = "outbox_relay"
+
+// RelayService is responsible for polling the outbox table and forwarding events to a message queue.
 type RelayService struct {
 	db        db.Database
 	publisher mq.Publisher
@@ -18,7 +21,7 @@ type RelayService struct {
 	ticker    *time.Ticker
 }
 
-// NewRelayService 创建一个新的 RelayService 实例
+// NewRelayService creates a new instance of the RelayService.
 func NewRelayService(db db.Database, pub mq.Publisher, interval time.Duration) *RelayService {
 	return &RelayService{
 		db:        db,
@@ -28,14 +31,13 @@ func NewRelayService(db db.Database, pub mq.Publisher, interval time.Duration) *
 	}
 }
 
-// Start 启动 RelayService 的后台轮询任务
+// Start begins the background polling task of the RelayService.
 func (s *RelayService) Start() {
-	logger.Info("Starting Outbox Relay Service...", "order-svc")
+	logger.Info("Starting Outbox Relay Service...", "component", componentName)
 	go func() {
 		for {
 			select {
 			case <-s.ticker.C:
-				// 每次处理都创建一个新的、可追踪的 context
 				s.processOutbox(context.Background())
 			case <-s.stopChan:
 				s.ticker.Stop()
@@ -45,18 +47,18 @@ func (s *RelayService) Start() {
 	}()
 }
 
-// Stop 停止 RelayService
+// Stop halts the RelayService.
 func (s *RelayService) Stop() {
-	logger.Info("Stopping Outbox Relay Service...", "order-svc")
+	logger.Info("Stopping Outbox Relay Service...", "component", componentName)
 	close(s.stopChan)
 }
 
-// processOutbox 从数据库中获取一批事件，发布它们，然后删除它们
+// processOutbox fetches a batch of events from the database, publishes them, and then deletes them.
 func (s *RelayService) processOutbox(ctx context.Context) {
-	var events []OutboxEvent
-	// 在一个事务中完成“捞取”和“删除”，防止被多个实例重复处理
+	var events []models.OutboxEvent
+	// Complete the "fetch" and "delete" in a single transaction to prevent duplicate processing by multiple instances.
 	err := s.db.RunInTransaction(ctx, func(tx db.TxTransaction) error {
-		// 使用 FOR UPDATE 来锁定行，防止并发问题
+		// Use FOR UPDATE to lock rows, preventing concurrency issues.
 		if err := tx.GetDB().WithContext(ctx).Set("gorm:query_option", "FOR UPDATE SKIP LOCKED").Limit(100).Order("created_at asc").Find(&events).Error; err != nil {
 			return err
 		}
@@ -71,22 +73,21 @@ func (s *RelayService) processOutbox(ctx context.Context) {
 				RoutingKey: event.RoutingKey,
 				Payload:    event.Payload,
 			}
-			// 发送到 RabbitMQ
-			// 注意：这里的 ctx 是从上层 processOutbox 传来的，它可能已经包含了追踪信息
+			// Publish to RabbitMQ.
+			// If publishing fails, the entire transaction is rolled back,
+			// meaning the event won't be deleted and will be retried on the next poll.
 			if err := s.publisher.Publish(ctx, mqEvent); err != nil {
-				// 如果发送失败，由于我们在一个事务中，整个事务会回滚，
-				// 这意味着事件不会被删除，将在下一次轮询中重试。
-				logger.Error(err, "Failed to publish outbox event, rolling back...", "order-svc", "event_id", event.ID)
+				logger.Error(err, "Failed to publish outbox event, rolling back", "component", componentName, "event_id", event.ID)
 				return err
 			}
 		}
 
-		// 所有事件都成功发布后，删除这些事件
+		// After all events are successfully published, delete them.
 		eventIDs := make([]uuid.UUID, len(events))
 		for i, event := range events {
 			eventIDs[i] = event.ID
 		}
-		err := tx.Delete(ctx, &OutboxEvent{}, "id IN ?", eventIDs)
+		err := tx.Delete(ctx, &models.OutboxEvent{}, "id IN ?", eventIDs)
 		if err != nil {
 			return err
 		}
@@ -94,10 +95,10 @@ func (s *RelayService) processOutbox(ctx context.Context) {
 	})
 
 	if err != nil {
-		logger.Error(err, "Error processing outbox", "order-svc")
+		logger.Error(err, "Error processing outbox", "component", componentName)
 	}
 
 	if len(events) > 0 {
-		logger.Info("Processed and published events from outbox", "order-svc", "count", len(events))
+		logger.Info("Processed and published events from outbox", "component", componentName, "count", len(events))
 	}
 }

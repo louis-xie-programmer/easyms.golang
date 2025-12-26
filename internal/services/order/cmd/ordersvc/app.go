@@ -1,6 +1,7 @@
 package main
 
 import (
+	"easyms/internal/platform/outbox_relay"
 	"easyms/internal/services/order/internal/handles"
 	"easyms/internal/services/order/internal/service"
 	"easyms/internal/shared/config"
@@ -15,40 +16,39 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// App 是所有组件的容器。
+// App is the container for all components.
 type App struct {
 	engine       *gin.Engine
 	ds           *discovery.Discovery
-	relayService *service.RelayService
+	relayService *outbox_relay.RelayService
 	publisher    mq.Publisher
 }
 
-// InitializeApp 手动构建并返回一个完整的 App 实例。
-// 这次它将正确地处理两步配置加载。
+// InitializeApp manually builds and returns a complete App instance.
 func InitializeApp(serverName string, env string) (*App, func(), error) {
-	// --- 1. 引导配置加载 ---
+	// --- 1. Bootstrap Config Loading ---
 	cfgStore, err := config.InitAppConfigStore()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to init app config store: %w", err)
 	}
 
-	// --- 2. 根据引导配置，创建核心依赖 ---
+	// --- 2. Create Core Dependencies based on Bootstrap Config ---
 	discoveryClient, discoveryCleanup, err := provideDiscovery(cfgStore)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	// --- 3. 根据引导配置，创建并加载真实的应用配置 ---
+	// --- 3. Create and Load Real App Config based on Bootstrap Config ---
 	appConfig, err := provideAppConfig(cfgStore, discoveryClient, serverName, env)
 	if err != nil {
 		discoveryCleanup()
 		return nil, nil, err
 	}
 
-	// --- 4. 日志初始化 (必须在配置加载后) ---
+	// --- 4. Logger Initialization (must be after config loading) ---
 	logger.Init(serverName, appConfig)
 
-	// --- 5. 初始化其他依赖于 AppConfig 的组件 ---
+	// --- 5. Initialize Other Dependencies that rely on AppConfig ---
 	dbase, err := provideDatabase(appConfig)
 	if err != nil {
 		discoveryCleanup()
@@ -61,15 +61,15 @@ func InitializeApp(serverName string, env string) (*App, func(), error) {
 		return nil, nil, err
 	}
 
-	// --- 6. 服务层初始化 ---
+	// --- 6. Service Layer Initialization ---
 	orderService := service.NewOrderService(dbase)
-	relayService := service.NewRelayService(dbase, publisher, 10*time.Second)
+	relayService := outbox_relay.NewRelayService(dbase, publisher, 10*time.Second)
 
-	// --- 7. 接口层初始化 ---
+	// --- 7. Interface Layer Initialization ---
 	orderHandler := handles.MakeCreateOrderEndpoint(orderService)
 	engine := provideGinEngine(orderHandler)
 
-	// --- 8. 构建 App ---
+	// --- 8. Build App ---
 	app := &App{
 		engine:       engine,
 		ds:           discoveryClient,
@@ -77,14 +77,14 @@ func InitializeApp(serverName string, env string) (*App, func(), error) {
 		publisher:    publisher,
 	}
 
-	// --- 9. 定义清理函数 ---
+	// --- 9. Define Cleanup Function ---
 	cleanup := func() {
 		relayService.Stop()
 		publisherCleanup()
 		discoveryCleanup()
 	}
 
-	// --- 10. 启动后台服务 ---
+	// --- 10. Start Background Services ---
 	if err := discoveryClient.Register(serverName, appConfig.Server.Host, appConfig.Server.Port, nil); err != nil {
 		cleanup()
 		return nil, nil, fmt.Errorf("failed to register service: %w", err)
@@ -94,9 +94,8 @@ func InitializeApp(serverName string, env string) (*App, func(), error) {
 	return app, cleanup, nil
 }
 
-// --- Provider 函数 ---
+// --- Provider Functions ---
 
-// provideAppConfig 是核心的改造，它实现了两步加载逻辑
 func provideAppConfig(cfgStore *models.AppConfigStore, discoveryClient *discovery.Discovery, serverName, env string) (*models.AppConfig, error) {
 	var provider config.AppConfigProvider
 	if cfgStore.StoreType == "consul" {
@@ -147,7 +146,7 @@ func providePublisher(cfg *models.AppConfig) (mq.Publisher, func(), error) {
 
 func provideGinEngine(orderHandler gin.HandlerFunc) *gin.Engine {
 	g := gin.Default()
-	// 健康检查端点
+	// Health check endpoint
 	g.GET("/health", func(c *gin.Context) {
 		c.String(200, "ok")
 	})

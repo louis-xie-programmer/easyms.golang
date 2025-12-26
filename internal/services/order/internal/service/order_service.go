@@ -2,60 +2,44 @@ package service
 
 import (
 	"context"
+	"easyms/internal/services/order/internal/constants"
 	"easyms/internal/shared/db"
-	. "easyms/internal/shared/models"
-	"encoding/json"
+	"easyms/internal/shared/events"
+	"easyms/internal/shared/models"
 	"fmt"
-	"time"
-
-	"github.com/google/uuid"
 )
 
-// OrderService 定义了订单服务的接口
+// OrderService defines the interface for the order service.
 type OrderService interface {
-	CreateOrder(ctx context.Context, order *Order) error
+	CreateOrder(ctx context.Context, order *models.Order) error
 }
 
-// orderService 实现了 OrderService 接口
+// orderService implements the OrderService interface.
 type orderService struct {
 	db db.Database
 }
 
-// NewOrderService 创建一个新的订单服务实例
+// NewOrderService creates a new order service instance.
 func NewOrderService(db db.Database) OrderService {
 	return &orderService{
 		db: db,
 	}
 }
 
-// CreateOrder 创建一个新订单，并将一个 "order.created" 事件存入发件箱表
-func (s *orderService) CreateOrder(ctx context.Context, order *Order) error {
+// CreateOrder creates a new order and stores an "order.created" event in the outbox table.
+func (s *orderService) CreateOrder(ctx context.Context, order *models.Order) error {
 	return s.db.RunInTransaction(ctx, func(tx db.TxTransaction) error {
-		// 1. 在事务中创建订单和订单项
+		// 1. Create the order and order items within the transaction.
 		if err := tx.Insert(ctx, order); err != nil {
 			return fmt.Errorf("failed to create order in db: %w", err)
 		}
 
-		// 2. 准备事件内容
-		eventPayload, err := json.Marshal(order)
+		// 2. Create and store the outbox event using the shared event publisher.
+		err := events.CreateAndStoreEvent(ctx, tx, constants.OrderTopic, constants.OrderCreatedEvent, order)
 		if err != nil {
-			return fmt.Errorf("failed to marshal order for event: %w", err)
+			return fmt.Errorf("failed to create and store outbox event: %w", err)
 		}
 
-		// 3. 创建 OutboxEvent 记录
-		outboxEvent := &OutboxEvent{
-			ID:         uuid.New(),
-			Exchange:   "orders.topic",
-			RoutingKey: "order.created",
-			Payload:    eventPayload,
-			CreatedAt:  time.Now(),
-		}
-
-		// 4. 将 OutboxEvent 记录一同存入数据库
-		if err := tx.Insert(ctx, outboxEvent); err != nil {
-			return fmt.Errorf("failed to create outbox event: %w", err)
-		}
-
-		return nil // 事务将在此处自动提交
+		return nil // The transaction will be committed automatically here.
 	})
 }
