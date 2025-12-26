@@ -14,6 +14,7 @@ import (
 	"easyms/internal/shared/discovery"
 	"easyms/internal/shared/models"
 	"fmt"
+	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/wire"
@@ -26,17 +27,47 @@ type App struct {
 }
 
 // NewApp 创建一个新的 App 实例。
-func NewApp(engine *gin.Engine, ds *discovery.Discovery) *App {
+func NewApp(engine *gin.Engine, ds *discovery.Discovery, cfg *models.AppConfig, inputs ConfigInputs) (*App, error) {
+	// 在这里执行服务注册
+	err := ds.Register(inputs.ServerName, cfg.Server.Host, cfg.Server.Port, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to register service: %w", err)
+	}
+
 	return &App{
 		engine: engine,
 		ds:     ds,
-	}
+	}, nil
 }
 
 // ConfigInputs 用于封装传递给 wire 的简单类型参数。
 type ConfigInputs struct {
 	ServerName string
 	Env        string
+}
+
+// HealthHandler 用于健康检查
+type HealthHandler struct {
+	db db.Database
+}
+
+func NewHealthHandler(db db.Database) *HealthHandler {
+	return &HealthHandler{db: db}
+}
+
+func (h *HealthHandler) Check(c *gin.Context) {
+	// 检查数据库连接
+	sqlDB, err := h.db.GetDB().DB()
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "down", "error": "failed to get db instance"})
+		return
+	}
+	if err := sqlDB.Ping(); err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "down", "error": "db ping failed"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
 // providerSet 集合了所有组件的构造函数。
@@ -47,10 +78,10 @@ var providerSet = wire.NewSet(
 	provideAppConfig, // 依赖 ConfigInputs
 	provideDatabase,
 	provideGinEngine,
+	NewHealthHandler,
 
 	// --- 服务层 Providers ---
 	service.NewUserService,
-	// wire.Bind(new(service.UserService), new(*service.userServiceImpl)), // 移除此行
 
 	// --- 接口层 Providers ---
 	handles.NewUserHandler,
@@ -101,12 +132,10 @@ func provideDatabase(cfg *models.AppConfig) (db.Database, error) {
 	return dbase, nil
 }
 
-func provideGinEngine(userHandler *handles.UserHandler) *gin.Engine {
+func provideGinEngine(userHandler *handles.UserHandler, healthHandler *HealthHandler) *gin.Engine {
 	g := gin.Default()
 	// 健康检查端点
-	g.GET("/health", func(c *gin.Context) {
-		c.String(200, "ok")
-	})
+	g.GET("/health", healthHandler.Check)
 	// 用户相关路由
 	userRoutes := g.Group("/users")
 	{

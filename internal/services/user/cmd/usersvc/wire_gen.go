@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/google/wire"
+	"net/http"
 )
 
 // Injectors from wire.go:
@@ -43,8 +44,13 @@ func InitializeApp(inputs ConfigInputs) (*App, func(), error) {
 	}
 	userService := service.NewUserService(database)
 	userHandler := handles.NewUserHandler(userService)
-	engine := provideGinEngine(userHandler)
-	app := NewApp(engine, discovery)
+	healthHandler := NewHealthHandler(database)
+	engine := provideGinEngine(userHandler, healthHandler)
+	app, err := NewApp(engine, discovery, appConfig, inputs)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
 	return app, func() {
 		cleanup()
 	}, nil
@@ -59,11 +65,17 @@ type App struct {
 }
 
 // NewApp 创建一个新的 App 实例。
-func NewApp(engine *gin.Engine, ds *discovery.Discovery) *App {
+func NewApp(engine *gin.Engine, ds *discovery.Discovery, cfg *models.AppConfig, inputs ConfigInputs) (*App, error) {
+
+	err := ds.Register(inputs.ServerName, cfg.Server.Host, cfg.Server.Port, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to register service: %w", err)
+	}
+
 	return &App{
 		engine: engine,
 		ds:     ds,
-	}
+	}, nil
 }
 
 // ConfigInputs 用于封装传递给 wire 的简单类型参数。
@@ -72,11 +84,36 @@ type ConfigInputs struct {
 	Env        string
 }
 
+// HealthHandler 用于健康检查
+type HealthHandler struct {
+	db db.Database
+}
+
+func NewHealthHandler(db2 db.Database) *HealthHandler {
+	return &HealthHandler{db: db2}
+}
+
+func (h *HealthHandler) Check(c *gin.Context) {
+
+	sqlDB, err := h.db.GetDB().DB()
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "down", "error": "failed to get db instance"})
+		return
+	}
+	if err := sqlDB.Ping(); err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "down", "error": "db ping failed"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
 // providerSet 集合了所有组件的构造函数。
 var providerSet = wire.NewSet(config.InitAppConfigStore, provideDiscovery,
 	provideAppConfig,
 	provideDatabase,
-	provideGinEngine, service.NewUserService, handles.NewUserHandler, NewApp,
+	provideGinEngine,
+	NewHealthHandler, service.NewUserService, handles.NewUserHandler, NewApp,
 )
 
 // provideAppConfig 现在依赖于 ConfigInputs 结构体，解决了多字符串参数问题。
@@ -119,12 +156,10 @@ func provideDatabase(cfg *models.AppConfig) (db.Database, error) {
 	return dbase, nil
 }
 
-func provideGinEngine(userHandler *handles.UserHandler) *gin.Engine {
+func provideGinEngine(userHandler *handles.UserHandler, healthHandler *HealthHandler) *gin.Engine {
 	g := gin.Default()
 
-	g.GET("/health", func(c *gin.Context) {
-		c.String(200, "ok")
-	})
+	g.GET("/health", healthHandler.Check)
 
 	userRoutes := g.Group("/users")
 	{

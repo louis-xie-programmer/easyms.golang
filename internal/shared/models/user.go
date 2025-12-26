@@ -11,7 +11,7 @@ import (
 type User struct {
 	ID           int64  `json:"id" gorm:"column:user_id;primaryKey;autoIncrement"`
 	Username     string `json:"username" gorm:"column:username;type:varchar(64);not null"`
-	PasswordHash string `json:"passwordHash" gorm:"column:password_hash;type:varchar(128);not null"`
+	PasswordHash string `json:"-" gorm:"column:password_hash;type:varchar(128);not null"` // 阻止密码哈希在 JSON 中序列化
 	Email        string `json:"email" gorm:"column:email;type:varchar(100);"`
 	// 用户具有的权限scope，多个权限用逗号分隔
 	Authorities string `json:"authorities" gorm:"column:authorities;type:varchar(255)"`

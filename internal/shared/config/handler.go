@@ -130,7 +130,7 @@ func (h *ConfigHandler) UpdateConfig(c *gin.Context) {
 	}
 
 	// 更新配置
-	globalAppConfig = &newConfig
+	SetAppConfig(&newConfig)
 
 	c.JSON(http.StatusOK, gin.H{"message": "Configuration updated successfully"})
 }

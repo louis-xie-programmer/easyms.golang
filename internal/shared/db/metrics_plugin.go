@@ -1,6 +1,10 @@
 package db
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -72,10 +76,8 @@ func (p *MetricsPlugin) after(db *gorm.DB) {
 		return
 	}
 
-	operation := db.Statement.SQL.String()
-	if len(operation) > 50 { // 简化操作名
-		operation = operation[:50]
-	}
+	// 优化 Operation Label：使用 "操作类型_表名" 或 SQL 哈希
+	operation := getOperationLabel(db)
 
 	table := db.Statement.Table
 	if table == "" {
@@ -93,4 +95,39 @@ func (p *MetricsPlugin) after(db *gorm.DB) {
 	dbRequestDuration.WithLabelValues(p.DBType, operation, table).Observe(duration)
 	// 记录总数和状态
 	dbRequestsTotal.WithLabelValues(p.DBType, operation, table, status).Inc()
+}
+
+// getOperationLabel 生成低基数的 Operation Label
+func getOperationLabel(db *gorm.DB) string {
+	// 1. 优先尝试使用 SQL 模板哈希（如果能获取到 SQL 模板）
+	// GORM 的 Statement.SQL.String() 通常是带参数占位符的 SQL，但也可能包含具体值
+	// 为了安全起见，我们主要依赖操作类型 + 表名
+
+	// 获取 SQL 语句的前几个单词作为操作类型
+	sql := strings.TrimSpace(strings.ToUpper(db.Statement.SQL.String()))
+	parts := strings.Fields(sql)
+	if len(parts) > 0 {
+		op := parts[0]
+		// 常见 SQL 动词白名单
+		switch op {
+		case "SELECT", "INSERT", "UPDATE", "DELETE", "BEGIN", "COMMIT", "ROLLBACK":
+			// 如果有表名，组合成 SELECT_users 这种形式
+			if db.Statement.Table != "" {
+				return op + "_" + db.Statement.Table
+			}
+			return op
+		}
+	}
+
+	// 如果无法识别，回退到使用 SQL 哈希（截取前8位）
+	// 这种方式虽然基数可能稍高，但比原始 SQL 好得多
+	hash := sha256.Sum256([]byte(sql))
+	return "SQL_" + hex.EncodeToString(hash[:])[:8]
+}
+
+// 辅助函数：移除 SQL 中的多余空格和换行
+var spaceRegexp = regexp.MustCompile(`\s+`)
+
+func normalizeSQL(sql string) string {
+	return strings.TrimSpace(spaceRegexp.ReplaceAllString(sql, " "))
 }

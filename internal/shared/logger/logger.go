@@ -292,6 +292,10 @@ func (l *Logger) submit(level, msg, module string, err error, ctx context.Contex
 	select {
 	case logChan <- entry:
 	default:
+		// 降级策略：如果通道已满，仅允许 Error 级别日志通过（同步写入 fallbackLogger）
+		if level == "error" {
+			fallbackLogger.Error().Err(err).Str("module", module).Msg(msg)
+		}
 		logDroppedTotal.WithLabelValues(entry.Service).Inc()
 		logPool.Put(entry)
 	}

@@ -81,7 +81,6 @@ func (cc *ConsulConfig) LoadAppConfig() error {
 	// Update the config in the manager, which in turn updates the global config
 	// This ensures thread-safe update.
 	cc.configMgr.UpdateConfig(newConfig)
-	globalAppConfig = newConfig // This should be updated via the manager
 
 	return nil
 }

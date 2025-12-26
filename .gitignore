@@ -10,3 +10,4 @@
 /deploy/docker/postgres
 /logs
 /migrations
+/blog

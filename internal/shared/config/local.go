@@ -57,7 +57,7 @@ func (lc *LocalConfig) LoadAppConfig() error {
 	if os.IsNotExist(err) {
 		fmt.Printf("服务配置文件不存在，使用全局配置 %s", appPath)
 		// 本地服务配置文件不存在，合并到全局配置
-		globalAppConfig = &appCfg
+		SetAppConfig(&appCfg)
 		return nil
 	}
 
@@ -79,7 +79,7 @@ func (lc *LocalConfig) LoadAppConfig() error {
 	}
 
 	// 更新全局配置
-	globalAppConfig = &cfg
+	SetAppConfig(&cfg)
 
 	return nil
 }

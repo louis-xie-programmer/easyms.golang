@@ -22,32 +22,36 @@ import (
 // 实现轮询负载均衡算法
 // 为每个服务维护独立的熔断器
 type ServiceDiscovery struct {
-	client *api.Client                 // Consul 客户端
+	client *api.Client // Consul 客户端
 
-	services map[string][]string       // 服务实例列表，key为服务名，value为实例地址列表
+	services       map[string][]string            // 服务实例列表，key为服务名，value为实例地址列表
 	serviceDetails map[string][]*api.AgentService // 服务实例详细信息
-	lbIndex  map[string]int            // 负载均衡索引，记录每个服务的轮询位置
+	lbIndex        map[string]int                 // 负载均衡索引，记录每个服务的轮询位置
 
-	lock sync.RWMutex                  // 读写锁，保护服务实例列表的并发访问
+	lock sync.RWMutex // 读写锁，保护服务实例列表的并发访问
 
-	breakers   map[string]*gobreaker.CircuitBreaker  // 熔断器映射，key为服务名
-	breakerMtx sync.RWMutex                           // 熔断器读写锁
-	
+	breakers   map[string]*gobreaker.CircuitBreaker // 熔断器映射，key为服务名
+	breakerMtx sync.RWMutex                         // 熔断器读写锁
+
 	// 负载均衡策略映射
 	loadBalancers map[string]LoadBalanceStrategy
 	lbMutex       sync.RWMutex
-	
+
 	// 健康检查管理器
 	healthManager *ServiceHealthManager
-	
+
 	// 权重负载均衡器
 	weightedLoadBalancer *WeightedLoadBalancer
+
+	// 用于防止重复监听
+	watchingServices sync.Map
 }
 
 // NewServiceDiscovery 创建新的服务发现客户端
 // 初始化服务发现客户端，创建必要的数据结构
 // 参数:
 //   - addr: Consul 服务地址
+//
 // 返回值:
 //   - *ServiceDiscovery: 服务发现客户端实例
 //   - error: 操作成功返回nil，失败返回具体错误
@@ -65,13 +69,13 @@ func NewServiceDiscovery(addr string) (*ServiceDiscovery, error) {
 	healthManager := NewServiceHealthManager(healthChecker)
 
 	sd := &ServiceDiscovery{
-		client:        client,
-		services:      make(map[string][]string),
-		serviceDetails: make(map[string][]*api.AgentService),
-		lbIndex:       make(map[string]int),
-		breakers:      make(map[string]*gobreaker.CircuitBreaker),
-		loadBalancers: make(map[string]LoadBalanceStrategy),
-		healthManager: healthManager,
+		client:               client,
+		services:             make(map[string][]string),
+		serviceDetails:       make(map[string][]*api.AgentService),
+		lbIndex:              make(map[string]int),
+		breakers:             make(map[string]*gobreaker.CircuitBreaker),
+		loadBalancers:        make(map[string]LoadBalanceStrategy),
+		healthManager:        healthManager,
 		weightedLoadBalancer: NewWeightedLoadBalancer(),
 	}
 
@@ -92,16 +96,16 @@ func (sd *ServiceDiscovery) SetLoadBalancer(serviceName string, strategy LoadBal
 func (sd *ServiceDiscovery) GetLoadBalancer(serviceName string) LoadBalanceStrategy {
 	sd.lbMutex.RLock()
 	defer sd.lbMutex.RUnlock()
-	
+
 	if lb, exists := sd.loadBalancers[serviceName]; exists {
 		return lb
 	}
-	
+
 	// 返回默认负载均衡策略
 	if lb, exists := sd.loadBalancers["default"]; exists {
 		return lb
 	}
-	
+
 	// 如果没有默认策略，创建一个轮询策略
 	defaultLB := &RoundRobinLoadBalancer{}
 	sd.loadBalancers["default"] = defaultLB
@@ -112,6 +116,7 @@ func (sd *ServiceDiscovery) GetLoadBalancer(serviceName string) LoadBalanceStrat
 // 通过 Consul Health API 查询指定服务的健康实例
 // 参数:
 //   - service: 服务名称
+//
 // 返回值:
 //   - []*api.ServiceEntry: 健康的服务实例列表
 //   - error: 操作成功返回nil，失败返回具体错误
@@ -124,6 +129,7 @@ func (d *ServiceDiscovery) GetHealthyInstances(service string) ([]*api.ServiceEn
 // 如果指定服务的熔断器不存在，则创建一个新的熔断器
 // 参数:
 //   - service: 服务名称
+//
 // 返回值:
 //   - *gobreaker.CircuitBreaker: 熔断器实例
 func (sd *ServiceDiscovery) ensureBreaker(service string) *gobreaker.CircuitBreaker {
@@ -136,7 +142,7 @@ func (sd *ServiceDiscovery) ensureBreaker(service string) *gobreaker.CircuitBrea
 
 	// 创建默认熔断器配置
 	settings := gobreaker.Settings{
-		Name:        service,           // 熔断器名称，通常为服务名
+		Name:        service,          // 熔断器名称，通常为服务名
 		MaxRequests: 5,                // 半开状态下允许的请求数
 		Interval:    60 * time.Second, // 清除失败计数的时间窗口
 		Timeout:     30 * time.Second, // 保持断路状态的超时时间
@@ -179,7 +185,16 @@ func (sd *ServiceDiscovery) ensureBreaker(service string) *gobreaker.CircuitBrea
 // 参数:
 //   - serviceName: 服务名称
 func (d *ServiceDiscovery) WatchService(serviceName string) {
+	// 检查是否已经为该服务启动了 watcher
+	if _, loaded := d.watchingServices.LoadOrStore(serviceName, true); loaded {
+		log.Printf("Watcher for service [%s] is already running.", serviceName)
+		return
+	}
+
 	go func() {
+		// 确保在 goroutine 退出时，从 map 中移除标记，以便可以重新启动 watcher
+		defer d.watchingServices.Delete(serviceName)
+
 		var lastIndex uint64 = 0
 
 		for {
@@ -191,6 +206,8 @@ func (d *ServiceDiscovery) WatchService(serviceName string) {
 			})
 			if err != nil {
 				log.Println("Consul watch error:", err)
+				// 发生错误时，等待一段时间再重试，避免快速失败循环
+				time.Sleep(5 * time.Second)
 				continue
 			}
 
@@ -208,21 +225,21 @@ func (d *ServiceDiscovery) WatchService(serviceName string) {
 					port := entry.Service.Port
 					addresses = append(addresses, addr+":"+portString(port))
 					serviceDetails = append(serviceDetails, entry.Service)
-					
+
 					// 更新权重负载均衡器中的实例信息
 					weight := 1
 					// 注意：这里简化处理，实际应该从entry.Service.Tags或其他地方获取权重
 					/*
-					if entry.Service.Weights != nil {
-						weight = entry.Service.Weights.Passing
-					}
+						if entry.Service.Weights != nil {
+							weight = entry.Service.Weights.Passing
+						}
 					*/
-					
+
 					metadata := entry.Service.Meta
 					if metadata == nil {
 						metadata = make(map[string]string)
 					}
-					
+
 					d.weightedLoadBalancer.AddInstance(
 						addr+":"+portString(port),
 						weight,
@@ -250,6 +267,7 @@ func (d *ServiceDiscovery) WatchService(serviceName string) {
 // 使用配置的负载均衡策略从服务实例列表中选择一个实例
 // 参数:
 //   - serviceName: 服务名称
+//
 // 返回值:
 //   - string: 服务实例地址
 func (d *ServiceDiscovery) GetService(serviceName string) string {
@@ -283,6 +301,7 @@ func (d *ServiceDiscovery) GetService(serviceName string) string {
 // 参数:
 //   - serviceName: 服务名称
 //   - strategy: 负载均衡策略
+//
 // 返回值:
 //   - string: 服务实例地址
 func (d *ServiceDiscovery) GetServiceWithStrategy(serviceName string, strategy LoadBalanceStrategy) string {
@@ -313,6 +332,7 @@ func (d *ServiceDiscovery) GetServiceWithStrategy(serviceName string, strategy L
 // GetWeightedService 使用权重负载均衡策略获取服务实例
 // 参数:
 //   - serviceName: 服务名称
+//
 // 返回值:
 //   - string: 服务实例地址
 func (d *ServiceDiscovery) GetWeightedService(serviceName string) string {
@@ -344,16 +364,17 @@ func (d *ServiceDiscovery) GetWeightedService(serviceName string) string {
 // GetServiceDetails 获取服务实例详细信息
 // 参数:
 //   - serviceName: 服务名称
+//
 // 返回值:
 //   - []*api.AgentService: 服务实例详细信息列表
 func (d *ServiceDiscovery) GetServiceDetails(serviceName string) []*api.AgentService {
 	d.lock.RLock()
 	defer d.lock.RUnlock()
-	
+
 	if details, exists := d.serviceDetails[serviceName]; exists {
 		return details
 	}
-	
+
 	return nil
 }
 
@@ -361,6 +382,7 @@ func (d *ServiceDiscovery) GetServiceDetails(serviceName string) []*api.AgentSer
 // 确保指定服务的熔断器存在并返回
 // 参数:
 //   - serviceName: 服务名称
+//
 // 返回值:
 //   - *gobreaker.CircuitBreaker: 熔断器实例
 func (sd *ServiceDiscovery) GetBreaker(serviceName string) *gobreaker.CircuitBreaker {
@@ -371,6 +393,7 @@ func (sd *ServiceDiscovery) GetBreaker(serviceName string) *gobreaker.CircuitBre
 // 方便地址拼接操作
 // 参数:
 //   - port: 端口号
+//
 // 返回值:
 //   - string: 端口字符串
 func portString(port int) string {

@@ -17,7 +17,6 @@ var now = time.Now // For testability
 
 // ConfigurationManager 配置管理器，统一管理配置的加载、合并和更新
 type ConfigurationManager struct {
-	appConfig  *models.AppConfig
 	configLock sync.RWMutex
 	provider   AppConfigProvider
 	watcher    ConfigWatcherInterface
@@ -26,8 +25,7 @@ type ConfigurationManager struct {
 // NewConfigurationManager 创建新的配置管理器
 func NewConfigurationManager(provider AppConfigProvider) *ConfigurationManager {
 	return &ConfigurationManager{
-		appConfig: &models.AppConfig{},
-		provider:  provider,
+		provider: provider,
 	}
 }
 
@@ -38,16 +36,12 @@ func (cm *ConfigurationManager) LoadConfig() error {
 
 // GetConfig 获取当前配置
 func (cm *ConfigurationManager) GetConfig() *models.AppConfig {
-	cm.configLock.RLock()
-	defer cm.configLock.RUnlock()
-	return cm.appConfig
+	return GetAppConfig()
 }
 
 // UpdateConfig 更新配置
 func (cm *ConfigurationManager) UpdateConfig(newConfig *models.AppConfig) {
-	cm.configLock.Lock()
-	defer cm.configLock.Unlock()
-	cm.appConfig = newConfig
+	SetAppConfig(newConfig)
 }
 
 // MergeConfigs 合并配置，将source配置合并到target配置中

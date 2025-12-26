@@ -5,21 +5,21 @@ import "strings"
 // ClientDetails 客户端详情模型
 type ClientDetails struct {
 	// client 的标识
-	ClientId string `gorm:"column:client_id;type:varchar(255)"`
+	ClientId string `json:"client_id" gorm:"column:client_id;type:varchar(255)"`
 	// client 的密钥
-	ClientSecret string `gorm:"column:client_secret;type:varchar(255)"`
+	ClientSecret string `json:"-" gorm:"column:client_secret;type:varchar(255)"` // 阻止密钥在 JSON 中序列化
 	// 访问令牌有效时间，秒
-	AccessTokenValiditySeconds int `gorm:"column:access_token_validity_seconds"`
+	AccessTokenValiditySeconds int `json:"access_token_validity_seconds" gorm:"column:access_token_validity_seconds"`
 	// 刷新令牌有效时间，秒
-	RefreshTokenValiditySeconds int `gorm:"column:refresh_token_validity_seconds"`
+	RefreshTokenValiditySeconds int `json:"refresh_token_validity_seconds" gorm:"column:refresh_token_validity_seconds"`
 	// 重定向地址，授权码类型中使用
-	RegisteredRedirectUri string `gorm:"column:registered_redirect_uri;type:varchar(255)"`
+	RegisteredRedirectUri string `json:"registered_redirect_uri" gorm:"column:registered_redirect_uri;type:varchar(255)"`
 	// 可以使用的授权类型，多个类型用逗号分隔
-	AuthorizedGrantTypes string `gorm:"column:authorized_grant_types;type:varchar(255)"`
+	AuthorizedGrantTypes string `json:"authorized_grant_types" gorm:"column:authorized_grant_types;type:varchar(255)"`
 	// 客户端运行的scope，多个scope用逗号分隔
-	AllowedAuthorities string `gorm:"column:allowed_scopes;type:varchar(255)"`
+	AllowedAuthorities string `json:"allowed_scopes" gorm:"column:allowed_scopes;type:varchar(255)"`
 	// 默认的scope，多个scope用逗号分隔
-	DefaultAuthorities string `gorm:"column:default_scope;type:varchar(255)"`
+	DefaultAuthorities string `json:"default_scope" gorm:"column:default_scope;type:varchar(255)"`
 }
 
 // TableName 设置ClientDetails模型对应的表名

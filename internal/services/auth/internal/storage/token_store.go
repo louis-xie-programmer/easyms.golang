@@ -1,7 +1,7 @@
 // token_store.go 令牌存储模块
 // 主要功能：
 // 1. JWT令牌的生成和验证
-// 2. 令牌撤销管理
+// 2. 令牌撤销管理（支持多级缓存）
 // 3. 令牌存储接口实现
 package storage
 
@@ -10,14 +10,15 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"time"
 
 	"easyms/internal/shared/db"
 	"easyms/internal/shared/logger"
 	. "easyms/internal/shared/models"
 	"errors"
-	"time"
 
 	"github.com/golang-jwt/jwt"
+	"github.com/patrickmn/go-cache"
 	"gorm.io/gorm"
 )
 
@@ -64,6 +65,8 @@ func NewJwtTokenStore(jwtTokenEnhancer *JwtTokenEnhancer, db db.Database, redisC
 		jwtTokenEnhancer: jwtTokenEnhancer,
 		db:               db,
 		redis:            redisClient,
+		// 初始化内存缓存，默认5分钟过期，每10分钟清理一次
+		revokedCache: cache.New(5*time.Minute, 10*time.Minute),
 	}
 }
 
@@ -72,6 +75,7 @@ type JwtTokenStore struct {
 	jwtTokenEnhancer *JwtTokenEnhancer // JWT令牌增强器
 	db               db.Database       // 数据库实例（保留用于兼容）
 	redis            *db.EasyRedis     // Redis客户端，用于高性能令牌撤销
+	revokedCache     *cache.Cache      // 内存缓存，用于缓存已撤销的令牌
 }
 
 // ReadAccessToken 根据令牌值获取访问令牌结构体
@@ -131,11 +135,16 @@ func (tokenStore *JwtTokenStore) revokeToken(tokenValue string, prefix string) {
 		return // 令牌已过期，无需撤销
 	}
 
+	hash := getTokenHash(tokenValue)
+	cacheKey := fmt.Sprintf("revoked:%s:%s", prefix, hash)
+
+	// 写入内存缓存
+	tokenStore.revokedCache.Set(cacheKey, true, expiresIn)
+
 	// 优先使用Redis
 	if tokenStore.redis != nil {
-		hash := getTokenHash(tokenValue)
 		err := tokenStore.redis.SetEx(
-			fmt.Sprintf("revoked:%s:%s", prefix, hash),
+			cacheKey,
 			"revoked",
 			int(expiresIn.Seconds()),
 		)
@@ -194,21 +203,29 @@ func (tokenStore *JwtTokenStore) ReadOAuth2DetailsForRefreshToken(tokenValue str
 
 // isTokenRevoked 封装了通用的检查令牌是否被撤销的逻辑
 func (tokenStore *JwtTokenStore) isTokenRevoked(tokenValue, prefix string) (bool, error) {
-	// 优先使用Redis
+	hash := getTokenHash(tokenValue)
+	cacheKey := fmt.Sprintf("revoked:%s:%s", prefix, hash)
+
+	// 1. 检查内存缓存
+	if _, found := tokenStore.revokedCache.Get(cacheKey); found {
+		return true, nil
+	}
+
+	// 2. 检查Redis
 	if tokenStore.redis != nil {
-		hash := getTokenHash(tokenValue)
-		val, err := tokenStore.redis.GetCache(fmt.Sprintf("revoked:%s:%s", prefix, hash))
+		val, err := tokenStore.redis.GetCache(cacheKey)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) { // 假设redis client在未找到时返回类似sql.ErrNoRows的错误
 			logger.Error(err, "redis get failed for checking token revocation", "auth-svc")
 			// Redis 故障，降级到数据库
 		} else if err == nil && val != "" {
+			// 在 Redis 中找到，写回内存缓存
+			tokenStore.revokedCache.Set(cacheKey, true, cache.DefaultExpiration)
 			return true, nil
-		} else {
-			return false, nil // Redis中不存在
 		}
+		// Redis中不存在，继续
 	}
 
-	// 降级到数据库
+	// 3. 降级到数据库
 	if tokenStore.db != nil {
 		var count int64
 		err := tokenStore.db.GetDB().Model(&RevokedToken{}).Where("token_value = ?", tokenValue).Count(&count).Error
@@ -216,7 +233,11 @@ func (tokenStore *JwtTokenStore) isTokenRevoked(tokenValue, prefix string) (bool
 			logger.Error(err, "db query failed for checking token revocation", "auth-svc")
 			return false, err
 		}
-		return count > 0, nil
+		if count > 0 {
+			// 在数据库中找到，写回内存缓存
+			tokenStore.revokedCache.Set(cacheKey, true, cache.DefaultExpiration)
+			return true, nil
+		}
 	}
 
 	return false, nil

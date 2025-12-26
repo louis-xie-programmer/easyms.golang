@@ -83,6 +83,8 @@ func main() {
 	logger.Init(serverName, appConfig)
 
 	if discoveryClient != nil {
+		fmt.Printf("Registering service with consul: %s; %s; %d\n", serverName, appConfig.Server.Host, appConfig.Server.Port)
+		// 服务注册
 		err = discoveryClient.Register(serverName, appConfig.Server.Host, appConfig.Server.Port, nil)
 		if err != nil {
 			logger.Error(err, "Failed to register service with consul", serverName)

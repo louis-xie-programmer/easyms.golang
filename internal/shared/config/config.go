@@ -7,12 +7,13 @@ import (
 	"fmt"
 	"gopkg.in/yaml.v2"
 	"os"
+	"sync/atomic"
 )
 
 var (
 	// 全局配置对象，用于存储应用的所有配置信息
-	// 通过GetAppConfig函数访问，确保线程安全
-	globalAppConfig *models.AppConfig
+	// 使用 atomic.Value 确保并发读写安全且高性能
+	globalAppConfig atomic.Value
 )
 
 // AppConfigProvider 配置提供者接口
@@ -29,7 +30,17 @@ type AppConfigProvider interface {
 // 返回当前的应用配置实例
 // 线程安全，可在多个goroutine中并发访问
 func GetAppConfig() *models.AppConfig {
-	return globalAppConfig
+	val := globalAppConfig.Load()
+	if val == nil {
+		return nil
+	}
+	return val.(*models.AppConfig)
+}
+
+// SetAppConfig 设置全局应用配置对象
+// 线程安全
+func SetAppConfig(cfg *models.AppConfig) {
+	globalAppConfig.Store(cfg)
 }
 
 // InitAppConfigStore 初始化应用配置存储

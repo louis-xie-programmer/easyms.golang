@@ -13,12 +13,14 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/sync/singleflight"
 )
 
 // EasyRedis Redis客户端封装
 // 对redis-go客户端进行封装，提供更便捷的操作接口
 type EasyRedis struct {
-	redis *redis.Client // Redis客户端实例
+	redis *redis.Client      // Redis客户端实例
+	sf    singleflight.Group // 用于防止缓存击穿的 singleflight
 }
 
 // NewEasyRedis 创建新的Redis客户端
@@ -260,18 +262,22 @@ func (r *EasyRedis) PFMerge(dest string, keys ...string) error {
 
 // GetCacheWithProtection 带防护机制的缓存获取方法
 // 实现缓存穿透、击穿、雪崩防护
-// 通过空值缓存防止穿透，通过互斥锁防止击穿，通过随机过期时间防止雪崩
+// 通过空值缓存防止穿透，通过 singleflight 防止击穿，通过随机过期时间防止雪崩
 // 参数:
 //   - key: 键名
 //   - nullCacheExpire: 空值缓存过期时间（秒）
-//   - mutexExpire: 互斥锁过期时间（秒）
+//   - mutexExpire: 互斥锁过期时间（秒）(保留参数以兼容接口，实际使用 singleflight)
 //   - fallback: 回退函数，用于从数据源获取数据
 //
 // 返回值:
 //   - interface{}: 缓存值或数据源返回的值
 //   - error: 操作成功返回nil，失败返回具体错误
 func (r *EasyRedis) GetCacheWithProtection(key string, nullCacheExpire, mutexExpire int, fallback func() (interface{}, error)) (interface{}, error) {
-	return r.getCacheWithProtection(key, nullCacheExpire, mutexExpire, fallback, 0)
+	// 使用 singleflight 合并并发请求
+	val, err, _ := r.sf.Do(key, func() (interface{}, error) {
+		return r.getCacheWithProtection(key, nullCacheExpire, mutexExpire, fallback, 0)
+	})
+	return val, err
 }
 
 // getCacheWithProtection 带防护机制的缓存获取方法（内部递归版本）
@@ -306,34 +312,18 @@ func (r *EasyRedis) getCacheWithProtection(key string, nullCacheExpire, mutexExp
 		return result, nil
 	}
 
-	// 2. 缓存未命中，尝试获取互斥锁
-	// 防止缓存击穿，使用分布式锁确保同一时间只有一个请求去查询数据库
-	lockKey := key + ":mutex"
-	lockAcquired, err := r.acquireLock(lockKey, mutexExpire)
-	if err != nil {
-		// 获取锁失败，直接返回 fallback 结果（可能导致击穿）
-		return fallback()
-	}
-
-	if !lockAcquired {
-		// 未获取到锁，短暂等待后重试
-		// 随机等待一段时间后重试，减轻并发压力
-		time.Sleep(time.Millisecond * time.Duration(10+rand.Intn(100)))
-		return r.getCacheWithProtection(key, nullCacheExpire, mutexExpire, fallback, retries+1)
-	}
-
-	// 3. 获取到锁，查询数据源
-	defer r.releaseLock(lockKey) // 释放锁
+	// 2. 缓存未命中，查询数据源
+	// 注意：由于外层已经使用了 singleflight，这里不需要再加分布式锁
+	// singleflight 已经确保了同一时间只有一个 goroutine 会执行到这里
 
 	// 调用回退函数从数据源获取数据
-	// 只有一个请求会执行到这里，避免了缓存击穿
 	result, err := fallback()
 	if err != nil {
 		// 数据源查询失败，直接返回错误
 		return nil, err
 	}
 
-	// 4. 将结果写入缓存
+	// 3. 将结果写入缓存
 	// 缓存数据以减轻数据库压力
 	var expireTime time.Duration
 	if result == nil {
