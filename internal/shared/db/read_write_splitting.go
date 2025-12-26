@@ -88,77 +88,77 @@ func (rw *ReadWriteSplitDatabase) AutoMigrate(models ...interface{}) error {
 }
 
 // Insert 插入数据（写操作）
-func (rw *ReadWriteSplitDatabase) Insert(value interface{}) error {
-	session := rw.getWriteDB().Session(&gorm.Session{})
+func (rw *ReadWriteSplitDatabase) Insert(ctx context.Context, value interface{}) error {
+	session := rw.getWriteDB().WithContext(ctx).Session(&gorm.Session{})
 	return session.Create(value).Error
 }
 
 // Query 查询数据（读操作）
 // 使用原生SQL查询并将结果扫描到目标结构体中
-func (rw *ReadWriteSplitDatabase) Query(dest interface{}, query string, args ...interface{}) error {
+func (rw *ReadWriteSplitDatabase) Query(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
 	// 默认使用轮询负载均衡策略
-	return rw.getReadDB(RoundRobinLoadBalance).Raw(query, args...).Scan(dest).Error
+	return rw.getReadDB(RoundRobinLoadBalance).WithContext(ctx).Raw(query, args...).Scan(dest).Error
 }
 
 // QueryWithStrategy 使用指定负载均衡策略查询数据（读操作）
-func (rw *ReadWriteSplitDatabase) QueryWithStrategy(strategy LoadBalanceStrategy, dest interface{}, query string, args ...interface{}) error {
-	return rw.getReadDB(strategy).Raw(query, args...).Scan(dest).Error
+func (rw *ReadWriteSplitDatabase) QueryWithStrategy(ctx context.Context, strategy LoadBalanceStrategy, dest interface{}, query string, args ...interface{}) error {
+	return rw.getReadDB(strategy).WithContext(ctx).Raw(query, args...).Scan(dest).Error
 }
 
 // Count 统计记录数（读操作）
-func (rw *ReadWriteSplitDatabase) Count(query string, args ...interface{}) (int64, error) {
+func (rw *ReadWriteSplitDatabase) Count(ctx context.Context, query string, args ...interface{}) (int64, error) {
 	var count int64
 	// 默认使用轮询负载均衡策略
-	err := rw.getReadDB(RoundRobinLoadBalance).Raw(query, args...).Count(&count).Error
+	err := rw.getReadDB(RoundRobinLoadBalance).WithContext(ctx).Raw(query, args...).Count(&count).Error
 	return count, err
 }
 
 // CountWithStrategy 使用指定负载均衡策略统计记录数（读操作）
-func (rw *ReadWriteSplitDatabase) CountWithStrategy(strategy LoadBalanceStrategy, query string, args ...interface{}) (int64, error) {
+func (rw *ReadWriteSplitDatabase) CountWithStrategy(ctx context.Context, strategy LoadBalanceStrategy, query string, args ...interface{}) (int64, error) {
 	var count int64
-	err := rw.getReadDB(strategy).Raw(query, args...).Count(&count).Error
+	err := rw.getReadDB(strategy).WithContext(ctx).Raw(query, args...).Count(&count).Error
 	return count, err
 }
 
 // Where 添加WHERE条件（读操作优先使用从库，但也可以用于写操作）
-func (rw *ReadWriteSplitDatabase) Where(query string, args ...interface{}) *gorm.DB {
+func (rw *ReadWriteSplitDatabase) Where(ctx context.Context, query string, args ...interface{}) *gorm.DB {
 	// WHERE操作既可以用于读也可以用于写，这里默认使用从库
-	return rw.getReadDB(RoundRobinLoadBalance).Where(query, args...)
+	return rw.getReadDB(RoundRobinLoadBalance).WithContext(ctx).Where(query, args...)
 }
 
 // WhereForWrite 添加WHERE条件（用于写操作）
-func (rw *ReadWriteSplitDatabase) WhereForWrite(query string, args ...interface{}) *gorm.DB {
-	return rw.getWriteDB().Where(query, args...)
+func (rw *ReadWriteSplitDatabase) WhereForWrite(ctx context.Context, query string, args ...interface{}) *gorm.DB {
+	return rw.getWriteDB().WithContext(ctx).Where(query, args...)
 }
 
 // Order 添加排序条件（读操作）
-func (rw *ReadWriteSplitDatabase) Order(query string) *gorm.DB {
-	return rw.getReadDB(RoundRobinLoadBalance).Order(query)
+func (rw *ReadWriteSplitDatabase) Order(ctx context.Context, query string) *gorm.DB {
+	return rw.getReadDB(RoundRobinLoadBalance).WithContext(ctx).Order(query)
 }
 
 // OrderForWrite 添加排序条件（用于写操作）
-func (rw *ReadWriteSplitDatabase) OrderForWrite(query string) *gorm.DB {
-	return rw.getWriteDB().Order(query)
+func (rw *ReadWriteSplitDatabase) OrderForWrite(ctx context.Context, query string) *gorm.DB {
+	return rw.getWriteDB().WithContext(ctx).Order(query)
 }
 
 // Limit 添加LIMIT限制（读操作）
-func (rw *ReadWriteSplitDatabase) Limit(limit int) *gorm.DB {
-	return rw.getReadDB(RoundRobinLoadBalance).Limit(limit)
+func (rw *ReadWriteSplitDatabase) Limit(ctx context.Context, limit int) *gorm.DB {
+	return rw.getReadDB(RoundRobinLoadBalance).WithContext(ctx).Limit(limit)
 }
 
 // LimitForWrite 添加LIMIT限制（用于写操作）
-func (rw *ReadWriteSplitDatabase) LimitForWrite(limit int) *gorm.DB {
-	return rw.getWriteDB().Limit(limit)
+func (rw *ReadWriteSplitDatabase) LimitForWrite(ctx context.Context, limit int) *gorm.DB {
+	return rw.getWriteDB().WithContext(ctx).Limit(limit)
 }
 
 // Update 更新数据（写操作）
-func (rw *ReadWriteSplitDatabase) Update(model interface{}, updates map[string]interface{}) error {
-	return rw.getWriteDB().Model(model).Updates(updates).Error
+func (rw *ReadWriteSplitDatabase) Update(ctx context.Context, model interface{}, updates map[string]interface{}) error {
+	return rw.getWriteDB().WithContext(ctx).Model(model).Updates(updates).Error
 }
 
 // Delete 删除数据（写操作）
-func (rw *ReadWriteSplitDatabase) Delete(model interface{}, conds ...interface{}) error {
-	return rw.getWriteDB().Delete(model, conds...).Error
+func (rw *ReadWriteSplitDatabase) Delete(ctx context.Context, model interface{}, conds ...interface{}) error {
+	return rw.getWriteDB().WithContext(ctx).Delete(model, conds...).Error
 }
 
 // GetDB 获取底层的GORM数据库实例（默认返回主库）
@@ -182,8 +182,8 @@ func (rw *ReadWriteSplitDatabase) GetType() string {
 }
 
 // Begin 开启事务（事务必须在主库上执行）
-func (rw *ReadWriteSplitDatabase) Begin() (TxTransaction, error) {
-	tx := rw.getWriteDB().Begin()
+func (rw *ReadWriteSplitDatabase) Begin(ctx context.Context) (TxTransaction, error) {
+	tx := rw.getWriteDB().WithContext(ctx).Begin()
 	if tx.Error != nil {
 		return nil, tx.Error
 	}
@@ -191,8 +191,8 @@ func (rw *ReadWriteSplitDatabase) Begin() (TxTransaction, error) {
 }
 
 // RunInTransaction 在事务中执行操作（事务必须在主库上执行）
-func (rw *ReadWriteSplitDatabase) RunInTransaction(fn func(tx TxTransaction) error) error {
-	return rw.getWriteDB().Transaction(func(tx *gorm.DB) error {
+func (rw *ReadWriteSplitDatabase) RunInTransaction(ctx context.Context, fn func(tx TxTransaction) error) error {
+	return rw.getWriteDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		return fn(&GormTransaction{DB: tx})
 	})
 }

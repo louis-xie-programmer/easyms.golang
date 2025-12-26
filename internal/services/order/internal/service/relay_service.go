@@ -35,7 +35,8 @@ func (s *RelayService) Start() {
 		for {
 			select {
 			case <-s.ticker.C:
-				s.processOutbox()
+				// 每次处理都创建一个新的、可追踪的 context
+				s.processOutbox(context.Background())
 			case <-s.stopChan:
 				s.ticker.Stop()
 				return
@@ -51,12 +52,12 @@ func (s *RelayService) Stop() {
 }
 
 // processOutbox 从数据库中获取一批事件，发布它们，然后删除它们
-func (s *RelayService) processOutbox() {
+func (s *RelayService) processOutbox(ctx context.Context) {
 	var events []OutboxEvent
 	// 在一个事务中完成“捞取”和“删除”，防止被多个实例重复处理
-	err := s.db.RunInTransaction(func(tx db.TxTransaction) error {
+	err := s.db.RunInTransaction(ctx, func(tx db.TxTransaction) error {
 		// 使用 FOR UPDATE 来锁定行，防止并发问题
-		if err := tx.GetDB().Set("gorm:query_option", "FOR UPDATE SKIP LOCKED").Limit(100).Order("created_at asc").Find(&events).Error; err != nil {
+		if err := tx.GetDB().WithContext(ctx).Set("gorm:query_option", "FOR UPDATE SKIP LOCKED").Limit(100).Order("created_at asc").Find(&events).Error; err != nil {
 			return err
 		}
 
@@ -71,7 +72,8 @@ func (s *RelayService) processOutbox() {
 				Payload:    event.Payload,
 			}
 			// 发送到 RabbitMQ
-			if err := s.publisher.Publish(context.Background(), mqEvent); err != nil {
+			// 注意：这里的 ctx 是从上层 processOutbox 传来的，它可能已经包含了追踪信息
+			if err := s.publisher.Publish(ctx, mqEvent); err != nil {
 				// 如果发送失败，由于我们在一个事务中，整个事务会回滚，
 				// 这意味着事件不会被删除，将在下一次轮询中重试。
 				logger.Error(err, "Failed to publish outbox event, rolling back...", "order-svc", "event_id", event.ID)
@@ -84,7 +86,7 @@ func (s *RelayService) processOutbox() {
 		for i, event := range events {
 			eventIDs[i] = event.ID
 		}
-		err := tx.Delete(&OutboxEvent{}, "id IN ?", eventIDs)
+		err := tx.Delete(ctx, &OutboxEvent{}, "id IN ?", eventIDs)
 		if err != nil {
 			return err
 		}

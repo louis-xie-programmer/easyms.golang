@@ -30,9 +30,9 @@ func NewOrderService(db db.Database) OrderService {
 
 // CreateOrder 创建一个新订单，并将一个 "order.created" 事件存入发件箱表
 func (s *orderService) CreateOrder(ctx context.Context, order *Order) error {
-	return s.db.RunInTransaction(func(tx db.TxTransaction) error {
+	return s.db.RunInTransaction(ctx, func(tx db.TxTransaction) error {
 		// 1. 在事务中创建订单和订单项
-		if err := tx.Insert(order); err != nil {
+		if err := tx.Insert(ctx, order); err != nil {
 			return fmt.Errorf("failed to create order in db: %w", err)
 		}
 
@@ -52,7 +52,7 @@ func (s *orderService) CreateOrder(ctx context.Context, order *Order) error {
 		}
 
 		// 4. 将 OutboxEvent 记录一同存入数据库
-		if err := tx.Insert(outboxEvent); err != nil {
+		if err := tx.Insert(ctx, outboxEvent); err != nil {
 			return fmt.Errorf("failed to create outbox event: %w", err)
 		}
 

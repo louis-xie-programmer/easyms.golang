@@ -30,5 +30,5 @@ func (tokenGranter *RefreshTokenGranter) Grant(ctx context.Context, grantType st
 	}
 
 	// 刷新令牌
-	return tokenGranter.tokenService.RefreshAccessToken(refreshTokenValue)
+	return tokenGranter.tokenService.RefreshAccessToken(ctx, refreshTokenValue)
 }

@@ -27,42 +27,57 @@ services:
     build:
       context: ../../
       dockerfile: ./internal/services/auth/cmd/Dockerfile
+    networks:
+      - easy-network
     environment:
-      POSTGRES_DSN: postgres://easy:easypass@easy-db:5432/easydb?sslmode=disable
-      CONSUL_ADDR: consul:8500
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      - POSTGRES_DSN=postgres://easy:easypass@easy-db:5432/easydb?sslmode=disable
+      - CONSUL_ADDR=consul:8500
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - EASYMS_TRACING_ENABLE=true
+      - EASYMS_TRACING_ENDPOINT=http://jaeger:14268/api/traces
     depends_on:
       - easy-db
       - consul
       - rabbitmq
+      - jaeger
 
   user-svc:
     container_name: user-svc
     build:
       context: ../../
       dockerfile: ./internal/services/user/cmd/Dockerfile
+    networks:
+      - easy-network
     environment:
-      POSTGRES_DSN: postgres://easy:easypass@easy-db:5432/easydb?sslmode=disable
-      CONSUL_ADDR: consul:8500
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      - POSTGRES_DSN=postgres://easy:easypass@easy-db:5432/easydb?sslmode=disable
+      - CONSUL_ADDR=consul:8500
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - EASYMS_TRACING_ENABLE=true
+      - EASYMS_TRACING_ENDPOINT=http://jaeger:14268/api/traces
     depends_on:
       - easy-db
       - consul
       - rabbitmq
+      - jaeger
 
   api-gateway:
     container_name: api-gateway
     build:
       context: ../../
       dockerfile: ./internal/platform/gateway/Dockerfile
+    networks:
+      - easy-network
     environment:
-      CONSUL_ADDR: consul:8500
+      - CONSUL_ADDR=consul:8500
+      - EASYMS_TRACING_ENABLE=true
+      - EASYMS_TRACING_ENDPOINT=http://jaeger:14268/api/traces
     ports:
       - "10000:10000"
     depends_on:
       - consul
       - user-svc
       - auth-svc
+      - jaeger
 
   consul:
     image: consul:1.15.4
@@ -107,6 +122,17 @@ services:
     networks:
       - easy-network
     command: redis-server --appendonly yes --requirepass easymspass
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: jaeger
+    ports:
+      - "16686:16686" # Jaeger UI
+      - "14268:14268" # OTLP HTTP Collector
+    networks:
+      - easy-network
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
 
   loki:
     image: grafana/loki:2.9.4

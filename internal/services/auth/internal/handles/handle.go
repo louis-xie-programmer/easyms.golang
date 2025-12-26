@@ -48,7 +48,7 @@ func MakeTokenEndpoint(svc service.TokenGranter, clientdetailsService service.Cl
 			return
 		}
 
-		clientDetails, err := clientdetailsService.LoadClientByClientId(req.ClientId)
+		clientDetails, err := clientdetailsService.LoadClientByClientId(c, req.ClientId)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": consts.ErrInvalidClient.Error()})
 			return
@@ -76,7 +76,7 @@ func VerifyTokenEndpoint(tokenService service.TokenService) gin.HandlerFunc {
 		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
 
 		// 使用tokenService验证令牌
-		_, err := tokenService.GetOAuth2DetailsByAccessToken(tokenStr)
+		_, err := tokenService.GetOAuth2DetailsByAccessToken(c, tokenStr)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token", "detail": err.Error()})
 			return
@@ -97,7 +97,7 @@ func RegisterClientEndPoint(service service.ClientDetailsService) gin.HandlerFun
 		}
 
 		// 验证客户端
-		clientDetails, err := service.CreateClientDetails(req.ClientId)
+		clientDetails, err := service.CreateClientDetails(ctx, req.ClientId)
 		if err != nil {
 			ctx.JSON(http.StatusBadRequest, gin.H{"error": "Failed to register client", "detail": err.Error()})
 			return
@@ -134,7 +134,7 @@ func RegisterUserEndPoint(service service.UserDetailsService, authorities []stri
 			return
 		}
 
-		_, err := service.CreateUserDetails(req.Username, req.Password, authorities, clientDetail.ClientId)
+		_, err := service.CreateUserDetails(ctx, req.Username, req.Password, authorities, clientDetail.ClientId)
 		if err != nil {
 			ctx.JSON(http.StatusBadRequest, gin.H{"error": "Failed to register user", "detail": err.Error()})
 			return
@@ -157,7 +157,7 @@ func LoginEndPoint(userDetailsService service.UserDetailsService, tokenService s
 		}
 
 		// 加载用户详情（而不是直接通过用户名和密码获取）
-		userDetails, err := userDetailsService.LoadUserByUsername(req.Username)
+		userDetails, err := userDetailsService.LoadUserByUsername(c, req.Username)
 		if err != nil {
 			// 避免暴露“用户不存在”的细节，统一返回认证失败
 			c.JSON(http.StatusUnauthorized, gin.H{"error": consts.ErrInvalidUsernameAndPasswordRequest.Error()})
@@ -181,7 +181,7 @@ func LoginEndPoint(userDetailsService service.UserDetailsService, tokenService s
 			return
 		}
 
-		token, err := tokenService.CreateAccessToken(&OAuth2Details{
+		token, err := tokenService.CreateAccessToken(c, &OAuth2Details{
 			User:   userDetails,
 			Client: clientDetails,
 		})
@@ -204,7 +204,7 @@ func RefreshTokenEndpoint(tokenService service.TokenService) gin.HandlerFunc {
 			return
 		}
 
-		newAccessToken, err := tokenService.RefreshAccessToken(req.RefreshToken)
+		newAccessToken, err := tokenService.RefreshAccessToken(c, req.RefreshToken)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 			return

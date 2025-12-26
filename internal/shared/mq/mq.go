@@ -4,9 +4,10 @@ import "context"
 
 // Event 代表一个通用的消息事件
 type Event struct {
-	Exchange   string // 交换机
-	RoutingKey string // 路由键
-	Payload    []byte // 消息内容
+	Exchange   string                 // 交换机
+	RoutingKey string                 // 路由键
+	Payload    []byte                 // 消息内容
+	Headers    map[string]interface{} // 用于传递元数据，如 Trace Context
 }
 
 // Publisher 定义了消息发布者的接口

@@ -28,7 +28,7 @@ func (tokenGranter *UsernamePasswordTokenGranter) Grant(ctx context.Context,
 	}
 
 	// 加载用户详情
-	userDetails, err := tokenGranter.userDetailsService.LoadUserByUsername(reader.Username)
+	userDetails, err := tokenGranter.userDetailsService.LoadUserByUsername(ctx, reader.Username)
 	if err != nil {
 		return nil, consts.ErrInvalidUsernameAndPasswordRequest
 	}
@@ -42,13 +42,13 @@ func (tokenGranter *UsernamePasswordTokenGranter) Grant(ctx context.Context,
 	allowedClientScopes := client.AllowedAuthorities // 从数据库加载（如 "read write"）
 
 	// 2. 用户维度校验（用户实际拥有的权限）
-	allowedUserScopes := tokenGranter.userDetailsService.GetUserAllowedScopes(userDetails.ID)
+	allowedUserScopes := tokenGranter.userDetailsService.GetUserAllowedScopes(ctx, userDetails.ID)
 
 	// 3. 交集运算生成最终有效scope
 	finalScopes := intersect(allowedClientScopes, allowedUserScopes)
 
 	// 根据用户信息和客户端信息生成访问令牌
-	return tokenGranter.tokenService.CreateAccessToken(&OAuth2Details{
+	return tokenGranter.tokenService.CreateAccessToken(ctx, &OAuth2Details{
 		Client: client,
 		User:   userDetails,
 		Scopes: finalScopes,

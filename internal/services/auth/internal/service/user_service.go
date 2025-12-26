@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"easyms/internal/shared/db"
 	"easyms/internal/shared/logger"
 	. "easyms/internal/shared/models"
@@ -20,11 +21,11 @@ var (
 // 定义了用户信息管理的标准方法
 type UserDetailsService interface {
 	// LoadUserByUsername 根据用户名加载用户详情
-	LoadUserByUsername(username string) (*User, error)
+	LoadUserByUsername(ctx context.Context, username string) (*User, error)
 	// GetUserAllowedScopes 获取用户允许的scope列表
-	GetUserAllowedScopes(userId int64) []string
+	GetUserAllowedScopes(ctx context.Context, userId int64) []string
 	// CreateUser 创建 用户
-	CreateUserDetails(username, password string, authorities []string, clientId string) (*User, error)
+	CreateUserDetails(ctx context.Context, username, password string, authorities []string, clientId string) (*User, error)
 }
 
 // PostgresUserDetailsService 基于PostgreSQL的用户详情服务实现
@@ -49,9 +50,9 @@ func NewPostgresUserDetailsService(db db.Database) UserDetailsService {
 // 返回值:
 //   - *UserDetails: 用户详情
 //   - error: 操作成功返回nil，失败返回具体错误
-func (service *PostgresUserDetailsService) LoadUserByUsername(username string) (*User, error) {
+func (service *PostgresUserDetailsService) LoadUserByUsername(ctx context.Context, username string) (*User, error) {
 	var user User
-	err := service.db.GetDB().Where("username = ?", username).First(&user).Error
+	err := service.db.Where(ctx, "username = ?", username).First(&user).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, ErrUserNotExist
@@ -62,9 +63,9 @@ func (service *PostgresUserDetailsService) LoadUserByUsername(username string) (
 	return &user, nil
 }
 
-func (service *PostgresUserDetailsService) GetUserAllowedScopes(userId int64) []string {
+func (service *PostgresUserDetailsService) GetUserAllowedScopes(ctx context.Context, userId int64) []string {
 	var user User
-	err := service.db.GetDB().Select("authorities").Where("user_id = ?", userId).First(&user).Error
+	err := service.db.Where(ctx, "user_id = ?", userId).Select("authorities").First(&user).Error
 	if err != nil {
 		logger.Error(err, "Failed to get user allowed scopes", "auth-svc", "userId", userId)
 		return []string{}
@@ -72,9 +73,9 @@ func (service *PostgresUserDetailsService) GetUserAllowedScopes(userId int64) []
 	return user.GetAuthorities()
 }
 
-func (service *PostgresUserDetailsService) CreateUserDetails(username, password string, authorities []string, clientId string) (*User, error) {
+func (service *PostgresUserDetailsService) CreateUserDetails(ctx context.Context, username, password string, authorities []string, clientId string) (*User, error) {
 	var count int64
-	err := service.db.GetDB().Model(&User{}).Where("username = ?", username).Count(&count).Error
+	err := service.db.GetDB().WithContext(ctx).Model(&User{}).Where("username = ?", username).Count(&count).Error
 	if err != nil {
 		logger.Error(err, "Failed to check if user exists", "auth-svc", "username", username)
 		return nil, err
@@ -94,8 +95,8 @@ func (service *PostgresUserDetailsService) CreateUserDetails(username, password 
 	}
 
 	// 使用事务确保用户和权限关系的一致性
-	err = service.db.RunInTransaction(func(tx db.TxTransaction) error {
-		if err := tx.Insert(userDetails); err != nil {
+	err = service.db.RunInTransaction(ctx, func(tx db.TxTransaction) error {
+		if err := tx.Insert(ctx, userDetails); err != nil {
 			return err
 		}
 
@@ -104,7 +105,7 @@ func (service *PostgresUserDetailsService) CreateUserDetails(username, password 
 			ClientID: clientId,
 			Scope:    userDetails.Authorities,
 		}
-		if err := tx.Insert(userAuthority); err != nil {
+		if err := tx.Insert(ctx, userAuthority); err != nil {
 			return err
 		}
 		return nil

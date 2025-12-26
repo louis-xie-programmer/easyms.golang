@@ -35,7 +35,7 @@ func (s *userServiceImpl) Create(ctx context.Context, username, password, email 
 		return nil, fmt.Errorf("failed to hash password: %w", err)
 	}
 
-	if err := s.db.Insert(user); err != nil {
+	if err := s.db.Insert(ctx, user); err != nil {
 		return nil, fmt.Errorf("failed to create user in db: %w", err)
 	}
 
@@ -45,7 +45,7 @@ func (s *userServiceImpl) Create(ctx context.Context, username, password, email 
 // GetByID 根据 ID 获取一个用户
 func (s *userServiceImpl) GetByID(ctx context.Context, id uint) (*models.User, error) {
 	var user models.User
-	err := s.db.GetDB().First(&user, id).Error
+	err := s.db.GetDB().WithContext(ctx).First(&user, id).Error
 	if err != nil {
 		return nil, err
 	}

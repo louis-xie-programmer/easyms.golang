@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"strings"
@@ -61,10 +62,10 @@ func (md *MysqlDatabase) AutoMigrate(models ...interface{}) error {
 }
 
 // Insert 插入数据（MySQL特有实现）
-func (md *MysqlDatabase) Insert(value interface{}) error {
+func (md *MysqlDatabase) Insert(ctx context.Context, value interface{}) error {
 	// MySQL特定的插入逻辑
 	// 执行插入操作
-	return md.DB.Create(value).Error
+	return md.DB.WithContext(ctx).Create(value).Error
 }
 
 // convertJsonFields 自动处理结构体中的JSON字段
@@ -85,7 +86,7 @@ func (md *MysqlDatabase) convertJsonFields(value interface{}) interface{} {
 }
 
 // Query 查询数据（MySQL特有实现）
-func (md *MysqlDatabase) Query(dest interface{}, query string, args ...interface{}) error {
+func (md *MysqlDatabase) Query(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
 	// MySQL特定的查询逻辑
 	// 可以在这里添加MySQL特定的优化或处理
 
@@ -109,22 +110,22 @@ func (md *MysqlDatabase) Query(dest interface{}, query string, args ...interface
 		}
 	}
 
-	return md.DB.Raw(query, args...).Scan(dest).Error
+	return md.DB.WithContext(ctx).Raw(query, args...).Scan(dest).Error
 }
 
 // Upsert MySQL特有功能：插入或更新（ON DUPLICATE KEY UPDATE）
-func (md *MysqlDatabase) Upsert(value interface{}, updateColumns ...string) error {
+func (md *MysqlDatabase) Upsert(ctx context.Context, value interface{}, updateColumns ...string) error {
 	// 构建ON DUPLICATE KEY UPDATE子句
 	if len(updateColumns) == 0 {
 		// 如果没有指定更新列，默认更新所有列
-		return md.DB.Clauses(clause.OnConflict{UpdateAll: true}).Create(value).Error
+		return md.DB.WithContext(ctx).Clauses(clause.OnConflict{UpdateAll: true}).Create(value).Error
 	} else {
 		// 构造要更新的列
 		updates := make(map[string]interface{})
 		for _, col := range updateColumns {
 			updates[col] = gorm.Expr(col) // 使用表达式引用原有值
 		}
-		return md.DB.Clauses(clause.OnConflict{DoUpdates: clause.Assignments(updates)}).Create(value).Error
+		return md.DB.WithContext(ctx).Clauses(clause.OnConflict{DoUpdates: clause.Assignments(updates)}).Create(value).Error
 	}
 }
 
@@ -139,8 +140,8 @@ func (md *MysqlDatabase) GetType() string {
 }
 
 // Begin 开启事务
-func (md *MysqlDatabase) Begin() (TxTransaction, error) {
-	tx := md.DB.Begin()
+func (md *MysqlDatabase) Begin(ctx context.Context) (TxTransaction, error) {
+	tx := md.DB.WithContext(ctx).Begin()
 	if tx.Error != nil {
 		return nil, tx.Error
 	}
@@ -148,8 +149,8 @@ func (md *MysqlDatabase) Begin() (TxTransaction, error) {
 }
 
 // RunInTransaction 在事务中执行操作
-func (md *MysqlDatabase) RunInTransaction(fn func(tx TxTransaction) error) error {
-	return md.DB.Transaction(func(tx *gorm.DB) error {
+func (md *MysqlDatabase) RunInTransaction(ctx context.Context, fn func(tx TxTransaction) error) error {
+	return md.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		return fn(&GormTransaction{DB: tx})
 	})
 }

@@ -35,14 +35,12 @@ func (h *UserHandler) CreateUser(c *gin.Context) {
 		return
 	}
 
-	user, err := h.userService.Create(c.Request.Context(), req.Username, req.Password, req.Email)
+	user, err := h.userService.Create(c, req.Username, req.Password, req.Email)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	// 避免返回密码哈希
-	user.PasswordHash = ""
 	c.JSON(http.StatusCreated, user)
 }
 
@@ -55,14 +53,12 @@ func (h *UserHandler) GetUserByID(c *gin.Context) {
 		return
 	}
 
-	user, err := h.userService.GetByID(c.Request.Context(), uint(id))
+	user, err := h.userService.GetByID(c, uint(id))
 	if err != nil {
 		// 这里可以更细致地处理 gorm.ErrRecordNotFound
 		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
 		return
 	}
 
-	// 避免返回密码哈希
-	user.PasswordHash = ""
 	c.JSON(http.StatusOK, user)
 }

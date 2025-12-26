@@ -1,0 +1,49 @@
+version: '3.8'
+
+networks:
+  easyms-net:
+    driver: bridge
+
+services:
+  consul:
+    image: consul:latest
+    container_name: consul-server
+    ports:
+      - "8500:8500"
+    networks:
+      - easyms-net
+    command: "agent -server -bootstrap-expect 1 -ui -client 0.0.0.0"
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: jaeger
+    ports:
+      - "16686:16686" # Jaeger UI
+      - "14268:14268" # OTLP HTTP Collector
+    networks:
+      - easyms-net
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+
+  # 示例：auth-svc 服务
+  # 您需要为 user-svc 等其他服务创建类似的配置
+  auth-svc:
+    build:
+      context: .
+      dockerfile: ./internal/services/auth/cmd/Dockerfile # 假设 Dockerfile 在这里
+    container_name: auth-svc
+    depends_on:
+      - consul
+      - jaeger
+    networks:
+      - easyms-net
+    environment:
+      # 通过环境变量覆盖配置文件中的值
+      - EASYMS_STORE_TYPE=consul
+      - EASYMS_CONSUL_HOST=consul:8500
+      - EASYMS_TRACING_ENABLE=true
+      - EASYMS_TRACING_ENDPOINT=http://jaeger:14268/api/traces
+      # 其他数据库、Redis等配置...
+    # 如果需要，可以映射端口到宿主机
+    # ports:
+    #   - "8080:8080"

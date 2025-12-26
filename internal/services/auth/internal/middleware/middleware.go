@@ -18,7 +18,7 @@ func parseAndSetDetails(c *gin.Context, tokenService service.TokenService) error
 	}
 	tokenValue := strings.TrimPrefix(authHeader, "Bearer ")
 
-	oauth2Details, err := tokenService.GetOAuth2DetailsByAccessToken(tokenValue)
+	oauth2Details, err := tokenService.GetOAuth2DetailsByAccessToken(c, tokenValue)
 	if err != nil {
 		return err
 	}

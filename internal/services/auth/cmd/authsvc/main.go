@@ -12,6 +12,7 @@ import (
 	"easyms/internal/shared/db"
 	"easyms/internal/shared/discovery"
 	"easyms/internal/shared/logger"
+	"easyms/internal/shared/tracing" // 引入 tracing 包
 	"fmt"
 	"net"
 	"net/http"
@@ -20,6 +21,8 @@ import (
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin" // 引入 otelgin
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"  // 引入 otelgrpc
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -82,9 +85,17 @@ func main() {
 	// 根据配置初始化日志系统（本地或Loki）
 	logger.Init(serverName, appConfig)
 
+	// 初始化分布式追踪系统
+	if appConfig.Tracing.Enable {
+		shutdown, err := tracing.InitTracerProvider(serverName, appConfig.Tracing.Endpoint)
+		if err != nil {
+			logger.Error(err, "Failed to initialize tracer provider", serverName)
+		} else {
+			defer shutdown(context.Background()) // 确保服务退出时刷新数据
+		}
+	}
+
 	if discoveryClient != nil {
-		fmt.Printf("Registering service with consul: %s; %s; %d\n", serverName, appConfig.Server.Host, appConfig.Server.Port)
-		// 服务注册
 		err = discoveryClient.Register(serverName, appConfig.Server.Host, appConfig.Server.Port, nil)
 		if err != nil {
 			logger.Error(err, "Failed to register service with consul", serverName)
@@ -191,7 +202,16 @@ func main() {
 			panic(err)
 		}
 
-		s := grpc.NewServer()
+		// 添加 OpenTelemetry 拦截器
+		var s *grpc.Server
+		if appConfig.Tracing.Enable {
+			s = grpc.NewServer(
+				grpc.StatsHandler(otelgrpc.NewServerHandler()),
+			)
+		} else {
+			s = grpc.NewServer()
+		}
+
 		// 创建并注册 gRPC 服务实现
 		pb.RegisterAuthServiceServer(s, service.NewGrpcServer(tokenGranter, tokenService, clientDetailsService))
 
@@ -204,6 +224,10 @@ func main() {
 	// 启动 HTTP 服务
 	// 使用Gin框架启动HTTP服务
 	g := gin.Default()
+	// 添加 OpenTelemetry 中间件
+	if appConfig.Tracing.Enable {
+		g.Use(otelgin.Middleware(serverName))
+	}
 
 	// 启动 gRPC-Gateway 反向代理
 	go func() {
@@ -212,7 +236,17 @@ func main() {
 		defer cancel()
 
 		mux := runtime.NewServeMux()
-		opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+		// 添加 OpenTelemetry 拦截器
+		var opts []grpc.DialOption
+		if appConfig.Tracing.Enable {
+			opts = []grpc.DialOption{
+				grpc.WithTransportCredentials(insecure.NewCredentials()),
+				grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+			}
+		} else {
+			opts = []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+		}
+
 		// 注册 gRPC-Gateway 处理器
 		err := pb.RegisterAuthServiceHandlerFromEndpoint(ctx, mux, fmt.Sprintf("localhost:%d", grpcPort), opts)
 		if err != nil {

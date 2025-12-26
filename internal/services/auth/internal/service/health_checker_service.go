@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"easyms/internal/shared/db"
 	"time"
 )
@@ -50,7 +51,7 @@ func (hc *HealthCheckerService) CheckHealth() *HealthStatus {
 func (hc *HealthCheckerService) checkDatabase() HealthCheckResult {
 	start := time.Now()
 	// 尝试执行简单查询
-	_, err := hc.db.Count("SELECT 1")
+	_, err := hc.db.Count(context.Background(), "SELECT 1")
 
 	latency := time.Since(start).Seconds() * 1000
 

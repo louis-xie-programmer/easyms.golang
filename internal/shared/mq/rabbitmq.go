@@ -8,7 +8,36 @@ import (
 	"time"
 
 	"github.com/streadway/amqp"
+	"go.opentelemetry.io/otel"
 )
+
+// amqpHeadersCarrier implements propagation.TextMapCarrier for AMQP headers.
+// It allows the OpenTelemetry propagator to read from and write to amqp.Table.
+type amqpHeadersCarrier map[string]interface{}
+
+// Get returns the value associated with the passed key.
+func (c amqpHeadersCarrier) Get(key string) string {
+	if val, ok := c[key]; ok {
+		if str, ok := val.(string); ok {
+			return str
+		}
+	}
+	return ""
+}
+
+// Set stores the key-value pair.
+func (c amqpHeadersCarrier) Set(key, value string) {
+	c[key] = value
+}
+
+// Keys returns a slice of all keys in the carrier.
+func (c amqpHeadersCarrier) Keys() []string {
+	keys := make([]string, 0, len(c))
+	for k := range c {
+		keys = append(keys, k)
+	}
+	return keys
+}
 
 const (
 	reconnectDelay = 5 * time.Second
@@ -126,9 +155,19 @@ func (p *RabbitMQPublisher) Publish(ctx context.Context, event Event) error {
 		return fmt.Errorf("failed to declare an exchange: %w", err)
 	}
 
+	// 如果 event.Headers 为 nil，则初始化
+	if event.Headers == nil {
+		event.Headers = make(map[string]interface{})
+	}
+
+	// 使用自定义的 carrier 直接向 event.Headers 注入追踪信息
+	propagator := otel.GetTextMapPropagator()
+	propagator.Inject(ctx, amqpHeadersCarrier(event.Headers))
+
 	msg := amqp.Publishing{
 		ContentType: "application/json",
 		Body:        event.Payload,
+		Headers:     amqp.Table(event.Headers), // amqp.Table 的底层就是 map[string]interface{}
 	}
 
 	for i := 0; i < maxRetries; i++ {
@@ -220,7 +259,10 @@ func (c *RabbitMQConsumer) Consume(queueName, routingKey, exchangeName string, h
 
 	go func() {
 		for d := range msgs {
-			ctx := context.Background()
+			// 使用自定义的 carrier 直接从 d.Headers 中提取追踪信息
+			propagator := otel.GetTextMapPropagator()
+			ctx := propagator.Extract(context.Background(), amqpHeadersCarrier(d.Headers))
+
 			if err := handler(ctx, d.Body); err == nil {
 				d.Ack(false)
 			} else {

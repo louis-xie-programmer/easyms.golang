@@ -7,6 +7,7 @@
 package db
 
 import (
+	"context"
 	"gorm.io/gorm"
 )
 
@@ -41,48 +42,48 @@ func (ed *EasyDatabase) AutoMigrate(models ...interface{}) error {
 }
 
 // Insert 插入数据
-func (ed *EasyDatabase) Insert(value interface{}) error {
+func (ed *EasyDatabase) Insert(ctx context.Context, value interface{}) error {
 	// 执行插入操作
-	return ed.DB.Create(value).Error
+	return ed.DB.WithContext(ctx).Create(value).Error
 }
 
 // Query 查询数据（可传 model + 条件）
 // 使用原生SQL查询并将结果扫描到目标结构体中
-func (ed *EasyDatabase) Query(dest interface{}, query string, args ...interface{}) error {
-	return ed.DB.Raw(query, args...).Scan(dest).Error
+func (ed *EasyDatabase) Query(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
+	return ed.DB.WithContext(ctx).Raw(query, args...).Scan(dest).Error
 }
 
 // Count 统计记录数
-func (ed *EasyDatabase) Count(query string, args ...interface{}) (int64, error) {
+func (ed *EasyDatabase) Count(ctx context.Context, query string, args ...interface{}) (int64, error) {
 	var count int64
-	err := ed.DB.Raw(query, args...).Count(&count).Error
+	err := ed.DB.WithContext(ctx).Raw(query, args...).Count(&count).Error
 	return count, err
 }
 
 // Where 添加WHERE条件
-func (ed *EasyDatabase) Where(query string, args ...interface{}) *gorm.DB {
-	return ed.DB.Where(query, args...)
+func (ed *EasyDatabase) Where(ctx context.Context, query string, args ...interface{}) *gorm.DB {
+	return ed.DB.WithContext(ctx).Where(query, args...)
 }
 
 // Order 添加排序条件
-func (ed *EasyDatabase) Order(query string) *gorm.DB {
-	return ed.DB.Order(query)
+func (ed *EasyDatabase) Order(ctx context.Context, query string) *gorm.DB {
+	return ed.DB.WithContext(ctx).Order(query)
 }
 
 // Limit 添加LIMIT限制
-func (ed *EasyDatabase) Limit(limit int) *gorm.DB {
-	return ed.DB.Limit(limit)
+func (ed *EasyDatabase) Limit(ctx context.Context, limit int) *gorm.DB {
+	return ed.DB.WithContext(ctx).Limit(limit)
 }
 
 // Update 更新数据
-func (ed *EasyDatabase) Update(model interface{}, updates map[string]interface{}) error {
-	return ed.DB.Model(model).Updates(updates).Error
+func (ed *EasyDatabase) Update(ctx context.Context, model interface{}, updates map[string]interface{}) error {
+	return ed.DB.WithContext(ctx).Model(model).Updates(updates).Error
 }
 
 // Delete 删除数据
 // 根据条件删除指定模型的数据
-func (ed *EasyDatabase) Delete(model interface{}, conds ...interface{}) error {
-	return ed.DB.Delete(model, conds...).Error
+func (ed *EasyDatabase) Delete(ctx context.Context, model interface{}, conds ...interface{}) error {
+	return ed.DB.WithContext(ctx).Delete(model, conds...).Error
 }
 
 // GetDB 获取底层的GORM数据库实例
@@ -96,8 +97,8 @@ func (ed *EasyDatabase) GetType() string {
 }
 
 // Begin 开启事务
-func (ed *EasyDatabase) Begin() (TxTransaction, error) {
-	tx := ed.DB.Begin()
+func (ed *EasyDatabase) Begin(ctx context.Context) (TxTransaction, error) {
+	tx := ed.DB.WithContext(ctx).Begin()
 	if tx.Error != nil {
 		return nil, tx.Error
 	}
@@ -105,8 +106,8 @@ func (ed *EasyDatabase) Begin() (TxTransaction, error) {
 }
 
 // RunInTransaction 在事务中执行操作
-func (ed *EasyDatabase) RunInTransaction(fn func(tx TxTransaction) error) error {
-	return ed.DB.Transaction(func(tx *gorm.DB) error {
+func (ed *EasyDatabase) RunInTransaction(ctx context.Context, fn func(tx TxTransaction) error) error {
+	return ed.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		return fn(&GormTransaction{DB: tx})
 	})
 }

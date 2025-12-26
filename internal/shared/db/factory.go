@@ -8,6 +8,7 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlserver"
 	"gorm.io/gorm"
+	"gorm.io/plugin/opentelemetry/tracing" // 引入 GORM OTel 插件
 )
 
 // DatabaseFactory 数据库工厂接口
@@ -44,6 +45,11 @@ func createGormDB(dialector gorm.Dialector, dbType string) (*gorm.DB, error) {
 
 	// 注册我们的指标插件
 	if err := db.Use(&MetricsPlugin{DBType: dbType}); err != nil {
+		return nil, err
+	}
+
+	// 注册 OpenTelemetry 插件
+	if err := db.Use(tracing.NewPlugin()); err != nil {
 		return nil, err
 	}
 

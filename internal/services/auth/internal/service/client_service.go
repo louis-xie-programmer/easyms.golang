@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"easyms/internal/shared/db"
 	"easyms/internal/shared/logger"
 	. "easyms/internal/shared/models"
@@ -14,9 +15,9 @@ import (
 // 定义了客户端信息管理的标准方法
 type ClientDetailsService interface {
 	// LoadClientByClientId 根据客户端ID加载客户端详情
-	LoadClientByClientId(clientId string) (*ClientDetails, error)
+	LoadClientByClientId(ctx context.Context, clientId string) (*ClientDetails, error)
 	// CreateClientDetails 创建一个新的客户端详情
-	CreateClientDetails(clientId string) (*ClientDetails, error)
+	CreateClientDetails(ctx context.Context, clientId string) (*ClientDetails, error)
 }
 
 // PostgresClientDetailsService 基于PostgreSQL的客户端详情服务实现
@@ -41,9 +42,9 @@ func NewPostgresClientDetailsService(db db.Database) ClientDetailsService {
 // 返回值:
 //   - *ClientDetails: 客户端详情
 //   - error: 操作成功返回nil，失败返回具体错误
-func (service *PostgresClientDetailsService) LoadClientByClientId(clientId string) (*ClientDetails, error) {
+func (service *PostgresClientDetailsService) LoadClientByClientId(ctx context.Context, clientId string) (*ClientDetails, error) {
 	var client ClientDetails
-	err := service.db.GetDB().Where("client_id = ?", clientId).First(&client).Error
+	err := service.db.Where(ctx, "client_id = ?", clientId).First(&client).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, fmt.Errorf("client with id %s not found", clientId)
@@ -67,9 +68,9 @@ const (
 	DefaultAllowedAuthorities = "ROLE_USER"
 )
 
-func (service *PostgresClientDetailsService) CreateClientDetails(clientId string) (*ClientDetails, error) {
+func (service *PostgresClientDetailsService) CreateClientDetails(ctx context.Context, clientId string) (*ClientDetails, error) {
 	var count int64
-	err := service.db.GetDB().Model(&ClientDetails{}).Where("client_id = ?", clientId).Count(&count).Error
+	err := service.db.GetDB().WithContext(ctx).Model(&ClientDetails{}).Where("client_id = ?", clientId).Count(&count).Error
 	if err != nil {
 		logger.Error(err, "Failed to check if client exists", "auth-svc", "clientId", clientId)
 		return nil, err
@@ -88,7 +89,7 @@ func (service *PostgresClientDetailsService) CreateClientDetails(clientId string
 		DefaultAuthorities:          DefaultDefaultAuthorities,
 	}
 
-	err = service.db.Insert(&clientDetails)
+	err = service.db.Insert(ctx, &clientDetails)
 	if err != nil {
 		logger.Error(err, "Failed to insert new client", "auth-svc", "clientId", clientId)
 		return nil, err

@@ -33,6 +33,7 @@ type AppConfig struct {
 	Server   ServerConfig   `yaml:"server,omitempty"`
 	Database DatabaseConfig `yaml:"database,omitempty"`
 	RabbitMQ RabbitMQConfig `yaml:"rabbitmq,omitempty"`
+	Tracing  TracingConfig  `yaml:"tracing,omitempty"` // 新增分布式追踪配置
 
 	// 添加配置锁，防止并发读写
 	ConfigLock sync.RWMutex `yaml:"-"`
@@ -109,6 +110,12 @@ type DatabaseConfig struct {
 // RabbitMQConfig 定义 RabbitMQ 配置
 type RabbitMQConfig struct {
 	URL string `yaml:"url"`
+}
+
+// TracingConfig 定义分布式追踪配置
+type TracingConfig struct {
+	Enable   bool   `yaml:"enable"`
+	Endpoint string `yaml:"endpoint"` // 例如: http://jaeger:14268/api/traces
 }
 
 // ConfigVersion 配置版本信息

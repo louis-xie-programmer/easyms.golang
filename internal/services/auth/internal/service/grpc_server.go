@@ -30,7 +30,7 @@ func NewGrpcServer(tg TokenGranter, ts TokenService, cs ClientDetailsService) au
 // GrantToken 实现了 gRPC 的 GrantToken 方法。
 func (s *grpcServer) GrantToken(ctx context.Context, req *auth2.TokenRequest) (*auth2.TokenResponse, error) {
 	// 1. 验证客户端信息
-	clientDetails, err := s.clientDetailsService.LoadClientByClientId(req.ClientId)
+	clientDetails, err := s.clientDetailsService.LoadClientByClientId(ctx, req.ClientId)
 	if err != nil {
 		return nil, status.Error(codes.Unauthenticated, consts.ErrInvalidClient.Error())
 	}
@@ -57,14 +57,14 @@ func (s *grpcServer) GrantToken(ctx context.Context, req *auth2.TokenRequest) (*
 	return &auth2.TokenResponse{
 		AccessToken:  oauth2Token.TokenValue,
 		TokenType:    "Bearer",
-		ExpiresIn:    int64(oauth2Token.ExpiresTime.Sub(context.Background().Value("now").(time.Time)).Seconds()),
+		ExpiresIn:    int64(oauth2Token.ExpiresTime.Sub(time.Now()).Seconds()),
 		RefreshToken: oauth2Token.RefreshToken.TokenValue,
 	}, nil
 }
 
 // VerifyToken 实现了 gRPC 的 VerifyToken 方法。
 func (s *grpcServer) VerifyToken(ctx context.Context, req *auth2.VerifyRequest) (*auth2.VerifyResponse, error) {
-	oauth2Details, err := s.tokenService.GetOAuth2DetailsByAccessToken(req.Token)
+	oauth2Details, err := s.tokenService.GetOAuth2DetailsByAccessToken(ctx, req.Token)
 	if err != nil {
 		return &auth2.VerifyResponse{Valid: false}, nil
 	}

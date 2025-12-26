@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"strings"
@@ -198,18 +199,18 @@ func (pd *PostgresDatabase) convertArrays(value interface{}) interface{} {
 
 // Insert 插入数据（PostgreSQL特有实现）
 // 处理数组类型字段并插入数据
-func (pd *PostgresDatabase) Insert(value interface{}) error {
+func (pd *PostgresDatabase) Insert(ctx context.Context, value interface{}) error {
 	// 先转换数组字段
 	v := pd.convertArrays(value)
 
 	// 执行插入操作
-	return pd.DB.Create(v).Error
+	return pd.DB.WithContext(ctx).Create(v).Error
 }
 
 // Query 查询数据（PostgreSQL特有实现）
 // 使用原生SQL查询并将结果扫描到目标结构体中
 // 处理数组类型字段的初始化
-func (pd *PostgresDatabase) Query(dest interface{}, query string, args ...interface{}) error {
+func (pd *PostgresDatabase) Query(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
 	// 检查dest是否为指向结构体的指针
 	destValue := reflect.ValueOf(dest)
 	if destValue.Kind() == reflect.Ptr && !destValue.IsNil() {
@@ -234,12 +235,12 @@ func (pd *PostgresDatabase) Query(dest interface{}, query string, args ...interf
 		}
 	}
 
-	return pd.DB.Raw(query, args...).Scan(dest).Error
+	return pd.DB.WithContext(ctx).Raw(query, args...).Scan(dest).Error
 }
 
 // Begin 开启事务
-func (pd *PostgresDatabase) Begin() (TxTransaction, error) {
-	tx := pd.DB.Begin()
+func (pd *PostgresDatabase) Begin(ctx context.Context) (TxTransaction, error) {
+	tx := pd.DB.WithContext(ctx).Begin()
 	if tx.Error != nil {
 		return nil, tx.Error
 	}
@@ -247,8 +248,8 @@ func (pd *PostgresDatabase) Begin() (TxTransaction, error) {
 }
 
 // RunInTransaction 在事务中执行操作
-func (pd *PostgresDatabase) RunInTransaction(fn func(tx TxTransaction) error) error {
-	return pd.DB.Transaction(func(tx *gorm.DB) error {
+func (pd *PostgresDatabase) RunInTransaction(ctx context.Context, fn func(tx TxTransaction) error) error {
+	return pd.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		return fn(&GormTransaction{DB: tx})
 	})
 }

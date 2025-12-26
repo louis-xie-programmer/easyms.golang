@@ -7,17 +7,21 @@
 package main
 
 import (
+	"context"
 	"easyms/internal/services/user/internal/handles"
 	"easyms/internal/services/user/internal/service"
 	"easyms/internal/shared/config"
 	"easyms/internal/shared/db"
 	"easyms/internal/shared/discovery"
+	"easyms/internal/shared/logger"
 	"easyms/internal/shared/models"
+	"easyms/internal/shared/tracing"
 	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/wire"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 )
 
 // App 是 user-svc 所有组件的容器。
@@ -27,17 +31,34 @@ type App struct {
 }
 
 // NewApp 创建一个新的 App 实例。
-func NewApp(engine *gin.Engine, ds *discovery.Discovery, cfg *models.AppConfig, inputs ConfigInputs) (*App, error) {
+func NewApp(engine *gin.Engine, ds *discovery.Discovery, cfg *models.AppConfig, inputs ConfigInputs) (*App, func(), error) {
 	// 在这里执行服务注册
 	err := ds.Register(inputs.ServerName, cfg.Server.Host, cfg.Server.Port, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to register service: %w", err)
+		return nil, nil, fmt.Errorf("failed to register service: %w", err)
+	}
+
+	// 初始化追踪系统
+	var shutdown func(context.Context) error
+	if cfg.Tracing.Enable {
+		shutdown, err = tracing.InitTracerProvider(inputs.ServerName, cfg.Tracing.Endpoint)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to initialize tracer: %w", err)
+		}
+	}
+
+	cleanup := func() {
+		if shutdown != nil {
+			if err := shutdown(context.Background()); err != nil {
+				logger.Error(err, "Failed to shutdown tracer provider", inputs.ServerName)
+			}
+		}
 	}
 
 	return &App{
 		engine: engine,
 		ds:     ds,
-	}, nil
+	}, cleanup, nil
 }
 
 // ConfigInputs 用于封装传递给 wire 的简单类型参数。
@@ -132,8 +153,14 @@ func provideDatabase(cfg *models.AppConfig) (db.Database, error) {
 	return dbase, nil
 }
 
-func provideGinEngine(userHandler *handles.UserHandler, healthHandler *HealthHandler) *gin.Engine {
+func provideGinEngine(userHandler *handles.UserHandler, healthHandler *HealthHandler, cfg *models.AppConfig, inputs ConfigInputs) *gin.Engine {
 	g := gin.Default()
+
+	// 添加 OpenTelemetry 中间件
+	if cfg.Tracing.Enable {
+		g.Use(otelgin.Middleware(inputs.ServerName))
+	}
+
 	// 健康检查端点
 	g.GET("/health", healthHandler.Check)
 	// 用户相关路由

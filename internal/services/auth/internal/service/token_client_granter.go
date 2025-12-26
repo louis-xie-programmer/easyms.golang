@@ -27,7 +27,7 @@ func (tokenGranter *ClientCredentialsTokenGranter) Grant(ctx context.Context, gr
 	}
 
 	// 根据客户端ID加载客户端详情
-	clientDetails, err := tokenGranter.clientService.LoadClientByClientId(client.ClientId)
+	clientDetails, err := tokenGranter.clientService.LoadClientByClientId(ctx, client.ClientId)
 	if err != nil {
 		return nil, consts.ErrInvalidClient
 	}
@@ -38,7 +38,7 @@ func (tokenGranter *ClientCredentialsTokenGranter) Grant(ctx context.Context, gr
 	}
 
 	// 创建客户统一端访问令牌
-	return tokenGranter.tokenService.CreateAccessToken(&OAuth2Details{
+	return tokenGranter.tokenService.CreateAccessToken(ctx, &OAuth2Details{
 		Client: clientDetails,
 		User:   nil,
 	})

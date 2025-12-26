@@ -6,6 +6,7 @@
 package storage
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -162,7 +163,7 @@ func (tokenStore *JwtTokenStore) revokeToken(tokenValue string, prefix string) {
 			CreatedAt:  time.Now(),
 		}
 		// 直接插入，忽略唯一键冲突错误
-		err := tokenStore.db.Insert(revokedToken)
+		err := tokenStore.db.Insert(context.Background(), revokedToken)
 		if err != nil && !errors.Is(err, gorm.ErrDuplicatedKey) {
 			logger.Error(err, "insert into revoked_tokens table failed", "auth-svc")
 		}

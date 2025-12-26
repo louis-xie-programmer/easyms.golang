@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"gorm.io/gorm"
 )
 
@@ -11,28 +12,28 @@ type Database interface {
 	AutoMigrate(models ...interface{}) error
 
 	// Insert 插入数据
-	Insert(value interface{}) error
+	Insert(ctx context.Context, value interface{}) error
 
 	// Query 查询数据
-	Query(dest interface{}, query string, args ...interface{}) error
+	Query(ctx context.Context, dest interface{}, query string, args ...interface{}) error
 
 	// Count 统计记录数
-	Count(query string, args ...interface{}) (int64, error)
+	Count(ctx context.Context, query string, args ...interface{}) (int64, error)
 
 	// Where 添加WHERE条件
-	Where(query string, args ...interface{}) *gorm.DB
+	Where(ctx context.Context, query string, args ...interface{}) *gorm.DB
 
 	// Order 添加排序条件
-	Order(query string) *gorm.DB
+	Order(ctx context.Context, query string) *gorm.DB
 
 	// Limit 添加LIMIT限制
-	Limit(limit int) *gorm.DB
+	Limit(ctx context.Context, limit int) *gorm.DB
 
 	// Update 更新数据
-	Update(model interface{}, updates map[string]interface{}) error
+	Update(ctx context.Context, model interface{}, updates map[string]interface{}) error
 
 	// Delete 删除数据
-	Delete(model interface{}, conds ...interface{}) error
+	Delete(ctx context.Context, model interface{}, conds ...interface{}) error
 
 	// GetDB 获取底层的GORM数据库实例
 	GetDB() *gorm.DB
@@ -41,8 +42,8 @@ type Database interface {
 	GetType() string
 
 	// Begin 开启事务
-	Begin() (TxTransaction, error)
+	Begin(ctx context.Context) (TxTransaction, error)
 
 	// RunInTransaction 在事务中执行操作
-	RunInTransaction(fn func(tx TxTransaction) error) error
+	RunInTransaction(ctx context.Context, fn func(tx TxTransaction) error) error
 }

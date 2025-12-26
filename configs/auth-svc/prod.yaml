@@ -2,3 +2,6 @@
 server:
   host: "172.29.16.1"
   port: 10001
+tracing:
+  enable: true
+  endpoint: "http://172.29.16.1:14268/api/traces"
