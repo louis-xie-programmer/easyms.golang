@@ -85,7 +85,7 @@ func MakeScopeHandler(scope string) gin.HandlerFunc {
 			return
 		}
 
-		user, ok := userDetails.(*model.UserDetails)
+		user, ok := userDetails.(*model.User)
 		if !ok {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": consts.ErrInvalidUser.Error()})
 			return

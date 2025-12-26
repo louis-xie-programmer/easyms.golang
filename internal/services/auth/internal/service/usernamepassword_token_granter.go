@@ -42,7 +42,7 @@ func (tokenGranter *UsernamePasswordTokenGranter) Grant(ctx context.Context,
 	allowedClientScopes := client.AllowedAuthorities // 从数据库加载（如 "read write"）
 
 	// 2. 用户维度校验（用户实际拥有的权限）
-	allowedUserScopes := tokenGranter.userDetailsService.GetUserAllowedScopes(userDetails.UserId)
+	allowedUserScopes := tokenGranter.userDetailsService.GetUserAllowedScopes(userDetails.ID)
 
 	// 3. 交集运算生成最终有效scope
 	finalScopes := intersect(allowedClientScopes, allowedUserScopes)

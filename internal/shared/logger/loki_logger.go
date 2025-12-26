@@ -3,7 +3,7 @@ package logger
 
 import (
 	"bytes"
-	"easyms/internal/shared/entities"
+	"easyms/internal/shared/models"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,7 +23,7 @@ type LokiLogger struct {
 }
 
 // NewLokiLogger 创建新的Loki日志记录器
-func NewLokiLogger(service string, cfg entities.LokiConfig) BackendLogger {
+func NewLokiLogger(service string, cfg models.LokiConfig) BackendLogger {
 	return &LokiLogger{
 		url:      cfg.URL,
 		service:  service,

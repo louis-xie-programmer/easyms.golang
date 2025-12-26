@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"easyms/internal/shared/db"
-	"easyms/internal/shared/models"
+	. "easyms/internal/shared/models"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -13,7 +13,7 @@ import (
 
 // OrderService 定义了订单服务的接口
 type OrderService interface {
-	CreateOrder(ctx context.Context, order *model.Order) error
+	CreateOrder(ctx context.Context, order *Order) error
 }
 
 // orderService 实现了 OrderService 接口
@@ -29,7 +29,7 @@ func NewOrderService(db db.Database) OrderService {
 }
 
 // CreateOrder 创建一个新订单，并将一个 "order.created" 事件存入发件箱表
-func (s *orderService) CreateOrder(ctx context.Context, order *model.Order) error {
+func (s *orderService) CreateOrder(ctx context.Context, order *Order) error {
 	return s.db.RunInTransaction(func(tx db.TxTransaction) error {
 		// 1. 在事务中创建订单和订单项
 		if err := tx.Insert(order); err != nil {
@@ -43,7 +43,7 @@ func (s *orderService) CreateOrder(ctx context.Context, order *model.Order) erro
 		}
 
 		// 3. 创建 OutboxEvent 记录
-		outboxEvent := &model.OutboxEvent{
+		outboxEvent := &OutboxEvent{
 			ID:         uuid.New(),
 			Exchange:   "orders.topic",
 			RoutingKey: "order.created",

@@ -244,7 +244,7 @@ type TokenEnhancer interface {
 // OAuth2TokenCustomClaims JWT令牌自定义声明
 // 包含OAuth2相关的令牌信息
 type OAuth2TokenCustomClaims struct {
-	UserDetails   UserDetails
+	UserDetails   User
 	ClientDetails ClientDetails
 	RefreshToken  OAuth2Token
 	JTI           string // JWT ID，用于防重放攻击
@@ -333,7 +333,7 @@ func (enhancer *JwtTokenEnhancer) Extract(tokenValue string) (*OAuth2Token, *OAu
 
 		// 只有当用户信息存在且不为空时才设置UserDetails
 		if claims.UserDetails.Username != "" || claims.UserDetails.Authorities != "" {
-			oauth2Details.User = &UserDetails{
+			oauth2Details.User = &User{
 				Username:    claims.UserDetails.Username,
 				Authorities: claims.UserDetails.Authorities,
 				// 不返回密码等敏感信息
@@ -370,11 +370,9 @@ func (enhancer *JwtTokenEnhancer) sign(oauth2Token *OAuth2Token, oauth2Details *
 	clientDetails.ClientSecret = ""
 
 	// 处理用户信息，添加空值检查
-	var userDetails UserDetails
+	var userDetails User
 	if oauth2Details.User != nil {
 		userDetails = *oauth2Details.User
-		// 清除用户敏感信息
-		userDetails.Password = ""
 	}
 
 	// 如果用户为空，则为客户端凭证授权

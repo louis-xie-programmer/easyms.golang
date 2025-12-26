@@ -3,7 +3,7 @@
 package config
 
 import (
-	"easyms/internal/shared/entities"
+	"easyms/internal/shared/models"
 	"fmt"
 	"gopkg.in/yaml.v2"
 	"os"
@@ -12,7 +12,7 @@ import (
 var (
 	// 全局配置对象，用于存储应用的所有配置信息
 	// 通过GetAppConfig函数访问，确保线程安全
-	globalAppConfig *entities.AppConfig
+	globalAppConfig *models.AppConfig
 )
 
 // AppConfigProvider 配置提供者接口
@@ -22,13 +22,13 @@ type AppConfigProvider interface {
 	// LoadAppConfig 加载并初始化配置
 	LoadAppConfig() error
 	// OnChange 配置变更回调
-	OnChange() func(*entities.AppConfig)
+	OnChange() func(*models.AppConfig)
 }
 
 // GetAppConfig 获取全局应用配置对象
 // 返回当前的应用配置实例
 // 线程安全，可在多个goroutine中并发访问
-func GetAppConfig() *entities.AppConfig {
+func GetAppConfig() *models.AppConfig {
 	return globalAppConfig
 }
 
@@ -36,7 +36,7 @@ func GetAppConfig() *entities.AppConfig {
 // 读取并解析 configs/app.yaml 配置文件，初始化配置存储
 // 该配置文件决定了使用哪种配置源（本地或Consul）
 // 返回配置存储对象和可能的错误
-func InitAppConfigStore() (*entities.AppConfigStore, error) {
+func InitAppConfigStore() (*models.AppConfigStore, error) {
 	// 读取应用配置文件
 	data, err := os.ReadFile("configs/app.yaml")
 	if err != nil {
@@ -45,7 +45,7 @@ func InitAppConfigStore() (*entities.AppConfigStore, error) {
 	}
 
 	// 解析 YAML 格式的配置文件
-	var cfg entities.AppConfigStore
+	var cfg models.AppConfigStore
 	err = yaml.Unmarshal(data, &cfg)
 	if err != nil {
 		return nil, err

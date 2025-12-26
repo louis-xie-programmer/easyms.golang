@@ -4,7 +4,7 @@ import (
 	"net/http"
 
 	"easyms/internal/services/order/internal/service"
-	"easyms/internal/shared/models"
+	. "easyms/internal/shared/models"
 	"github.com/gin-gonic/gin"
 )
 
@@ -30,16 +30,16 @@ func MakeCreateOrderEndpoint(svc service.OrderService) gin.HandlerFunc {
 		}
 
 		// 将请求体转换为 GORM 模型
-		order := &model.Order{
+		order := &Order{
 			UserID:      req.UserID,
-			Status:      model.StatusPending,
-			OrderItems:  make([]model.OrderItem, len(req.OrderItems)),
+			Status:      StatusPending,
+			OrderItems:  make([]OrderItem, len(req.OrderItems)),
 			TotalAmount: 0,
 		}
 
 		var total float64
 		for i, item := range req.OrderItems {
-			order.OrderItems[i] = model.OrderItem{
+			order.OrderItems[i] = OrderItem{
 				ProductID: item.ProductID,
 				Quantity:  item.Quantity,
 				Price:     item.Price,

@@ -2,7 +2,7 @@ package config
 
 import (
 	"easyms/internal/shared/discovery"
-	"easyms/internal/shared/entities"
+	"easyms/internal/shared/models"
 	"fmt"
 	"net/http"
 
@@ -122,7 +122,7 @@ func (h *ConfigHandler) GetCurrentConfig(c *gin.Context) {
 // UpdateConfig 更新当前配置
 // PUT /config/current
 func (h *ConfigHandler) UpdateConfig(c *gin.Context) {
-	var newConfig entities.AppConfig
+	var newConfig models.AppConfig
 
 	if err := c.ShouldBindJSON(&newConfig); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

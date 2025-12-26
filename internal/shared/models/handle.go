@@ -1,4 +1,4 @@
-package model
+package models
 
 type CheckTokenRequest struct {
 	Token         string `json:"token"`

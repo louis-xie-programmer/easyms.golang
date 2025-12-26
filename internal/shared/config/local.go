@@ -2,7 +2,7 @@
 package config
 
 import (
-	"easyms/internal/shared/entities"
+	"easyms/internal/shared/models"
 	"fmt"
 	"os"
 
@@ -29,10 +29,10 @@ func NewLocalConfig(serviceName string, env string) AppConfigProvider {
 	}
 }
 
-func (lc *LocalConfig) OnChange() func(*entities.AppConfig) {
+func (lc *LocalConfig) OnChange() func(*models.AppConfig) {
 	// 暂时只在consul中更新配置
 	// lc.configMgr.UpdateConfig(newConfig)
-	return func(newConfig *entities.AppConfig) {
+	return func(newConfig *models.AppConfig) {
 	}
 }
 
@@ -45,7 +45,7 @@ func (lc *LocalConfig) LoadAppConfig() error {
 	}
 
 	// 读取app配置文件
-	var appCfg entities.AppConfig
+	var appCfg models.AppConfig
 	if err := yaml.Unmarshal(data, &appCfg); err != nil {
 		return err
 	}
@@ -67,7 +67,7 @@ func (lc *LocalConfig) LoadAppConfig() error {
 		return err
 	}
 
-	var cfg entities.AppConfig
+	var cfg models.AppConfig
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return err
 	}
@@ -85,16 +85,16 @@ func (lc *LocalConfig) LoadAppConfig() error {
 }
 
 // mergoConfig 合并两个配置对象
-func mergoConfig(dst, src *entities.AppConfig) error {
-	if dst.Log == (entities.LogConfig{}) {
+func mergoConfig(dst, src *models.AppConfig) error {
+	if dst.Log == (models.LogConfig{}) {
 		dst.Log = src.Log
 	}
 
-	if dst.Loki == (entities.LokiConfig{}) {
+	if dst.Loki == (models.LokiConfig{}) {
 		dst.Loki = src.Loki
 	}
 
-	if dst.Database == (entities.DatabaseConfig{}) {
+	if dst.Database == (models.DatabaseConfig{}) {
 		dst.Database = src.Database
 	} else {
 		// 只有当目标配置中的字段为空时才从源配置复制
@@ -130,12 +130,12 @@ func mergoConfig(dst, src *entities.AppConfig) error {
 		}
 	}
 
-	if dst.OAuth2 == (entities.OAuth2Config{}) {
+	if dst.OAuth2 == (models.OAuth2Config{}) {
 		dst.OAuth2 = src.OAuth2
 	}
 
 	// 合并Cache.Redis配置
-	if dst.Cache.Redis == (entities.RedisConfig{}) {
+	if dst.Cache.Redis == (models.RedisConfig{}) {
 		dst.Cache.Redis = src.Cache.Redis
 	} else {
 		if dst.Cache.Redis.Address == "" {
@@ -155,7 +155,7 @@ func mergoConfig(dst, src *entities.AppConfig) error {
 		}
 	}
 
-	if dst.RabbitMQ == (entities.RabbitMQConfig{}) {
+	if dst.RabbitMQ == (models.RabbitMQConfig{}) {
 		dst.RabbitMQ = src.RabbitMQ
 	}
 

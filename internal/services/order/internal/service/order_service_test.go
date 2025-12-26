@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"easyms/internal/shared/db"
-	"easyms/internal/shared/models"
+	. "easyms/internal/shared/models"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -23,9 +23,9 @@ func (m *mockTx) Insert(value interface{}) error {
 	}
 	// 根据类型将插入的对象存入 mockDatabase 的切片中，以便断言
 	switch v := value.(type) {
-	case *model.Order:
+	case *Order:
 		m.db.insertedOrders = append(m.db.insertedOrders, v)
-	case *model.OutboxEvent:
+	case *OutboxEvent:
 		m.db.insertedEvents = append(m.db.insertedEvents, v)
 	}
 	return nil
@@ -46,8 +46,8 @@ func (m *mockTx) GetDB() *gorm.DB                                               
 // mockDatabase 实现了 db.Database 接口，用于测试
 type mockDatabase struct {
 	shouldFail     bool
-	insertedOrders []*model.Order
-	insertedEvents []*model.OutboxEvent
+	insertedOrders []*Order
+	insertedEvents []*OutboxEvent
 }
 
 func (m *mockDatabase) RunInTransaction(fn func(tx db.TxTransaction) error) error {
@@ -79,10 +79,10 @@ func TestCreateOrder_Success(t *testing.T) {
 	// 1. 准备
 	mockDB := &mockDatabase{}
 	orderService := NewOrderService(mockDB)
-	sampleOrder := &model.Order{
+	sampleOrder := &Order{
 		UserID:      1,
 		TotalAmount: 199.99,
-		OrderItems: []model.OrderItem{
+		OrderItems: []OrderItem{
 			{ProductID: 101, Quantity: 1, Price: 199.99},
 		},
 	}
@@ -116,7 +116,7 @@ func TestCreateOrder_Success(t *testing.T) {
 	}
 
 	// 验证事件的 Payload 内容是否正确
-	var payloadOrder model.Order
+	var payloadOrder Order
 	if err := json.Unmarshal(event.Payload, &payloadOrder); err != nil {
 		t.Fatalf("Failed to unmarshal event payload: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestCreateOrder_DBError(t *testing.T) {
 	// 1. 准备
 	mockDB := &mockDatabase{shouldFail: true} // 设置 mockDB 为失败模式
 	orderService := NewOrderService(mockDB)
-	sampleOrder := &model.Order{UserID: 1}
+	sampleOrder := &Order{UserID: 1}
 
 	// 2. 执行
 	err := orderService.CreateOrder(context.Background(), sampleOrder)

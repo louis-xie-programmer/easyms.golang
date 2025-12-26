@@ -3,7 +3,7 @@ package service
 import (
 	"easyms/internal/services/auth/internal/consts"
 	"easyms/internal/services/auth/internal/storage"
-	"easyms/internal/shared/models"
+	. "easyms/internal/shared/models"
 	"testing"
 	"time"
 
@@ -16,20 +16,20 @@ type mockTokenStore struct {
 	mock.Mock
 }
 
-func (m *mockTokenStore) ReadAccessToken(tokenValue string) (*model.OAuth2Token, error) {
+func (m *mockTokenStore) ReadAccessToken(tokenValue string) (*OAuth2Token, error) {
 	args := m.Called(tokenValue)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*model.OAuth2Token), args.Error(1)
+	return args.Get(0).(*OAuth2Token), args.Error(1)
 }
 
-func (m *mockTokenStore) ReadOAuth2Details(tokenValue string) (*model.OAuth2Details, error) {
+func (m *mockTokenStore) ReadOAuth2Details(tokenValue string) (*OAuth2Details, error) {
 	args := m.Called(tokenValue)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*model.OAuth2Details), args.Error(1)
+	return args.Get(0).(*OAuth2Details), args.Error(1)
 }
 
 func (m *mockTokenStore) RemoveAccessToken(tokenValue string) {
@@ -53,16 +53,16 @@ func TestDefaultTokenService_CreateAccessToken(t *testing.T) {
 	tokenEnhancer := storage.NewJwtTokenEnhancer("test-secret")
 	tokenService := NewTokenService(mockStore, tokenEnhancer)
 
-	clientDetails := &model.ClientDetails{
+	clientDetails := &ClientDetails{
 		ClientId:                    "test-client",
 		AccessTokenValiditySeconds:  3600,
 		RefreshTokenValiditySeconds: 7200,
 	}
-	userDetails := &model.UserDetails{
-		UserId:   1,
+	userDetails := &User{
+		ID:       1,
 		Username: "test-user",
 	}
-	oauth2Details := &model.OAuth2Details{
+	oauth2Details := &OAuth2Details{
 		Client: clientDetails,
 		User:   userDetails,
 	}
@@ -95,13 +95,13 @@ func TestDefaultTokenService_RefreshAccessToken(t *testing.T) {
 	tokenService := NewTokenService(mockStore, tokenEnhancer)
 
 	// 模拟一个有效的旧刷新令牌
-	oldRefreshToken := &model.OAuth2Token{
+	oldRefreshToken := &OAuth2Token{
 		TokenValue:  "valid-refresh-token",
 		ExpiresTime: func() *time.Time { t := time.Now().Add(2 * time.Hour); return &t }(),
 	}
-	oauth2Details := &model.OAuth2Details{
-		Client: &model.ClientDetails{ClientId: "test-client", AccessTokenValiditySeconds: 3600, RefreshTokenValiditySeconds: 7200},
-		User:   &model.UserDetails{Username: "test-user"},
+	oauth2Details := &OAuth2Details{
+		Client: &ClientDetails{ClientId: "test-client", AccessTokenValiditySeconds: 3600, RefreshTokenValiditySeconds: 7200},
+		User:   &User{Username: "test-user"},
 	}
 
 	// 设置 Mock 期望
@@ -130,7 +130,7 @@ func TestDefaultTokenService_RefreshAccessToken_Expired(t *testing.T) {
 	tokenService := NewTokenService(mockStore, tokenEnhancer)
 
 	// 模拟一个已过期的刷新令牌
-	expiredRefreshToken := &model.OAuth2Token{
+	expiredRefreshToken := &OAuth2Token{
 		TokenValue:  "expired-refresh-token",
 		ExpiresTime: func() *time.Time { t := time.Now().Add(-1 * time.Hour); return &t }(),
 	}

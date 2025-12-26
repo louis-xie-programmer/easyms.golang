@@ -13,7 +13,7 @@ package logger
 
 import (
 	"context"
-	"easyms/internal/shared/entities"
+	"easyms/internal/shared/models"
 	"math/rand"
 	"os"
 	"strings"
@@ -37,6 +37,8 @@ var (
 	sampleRate     float64        = 1.0 // 采样率，默认1.0表示100%记录
 	fallbackLogger zerolog.Logger       // 备用日志记录器
 	rootLogger     *Logger              // 全局根日志记录器
+	isInitialized  bool                 // 标记日志系统是否已初始化
+	initMux        sync.Mutex           // 保护 isInitialized 的互斥锁
 )
 
 // 全局日志通道和管理器
@@ -130,16 +132,23 @@ func SetSampleRate(rate float64) {
 }
 
 // Init 初始化日志系统
-func Init(service string, cfg *entities.AppConfig) {
+func Init(service string, cfg *models.AppConfig) {
+	initMux.Lock()
+	defer initMux.Unlock()
+
+	if isInitialized {
+		return
+	}
+
 	fallbackLogger = zerolog.New(os.Stderr).With().Timestamp().Str("service", service).Str("module", "logger_fallback").Logger()
 	defaultService = service
-	if cfg != nil && cfg.Log != (entities.LogConfig{}) {
+	if cfg != nil && cfg.Log != (models.LogConfig{}) {
 		minLogLevel = strings.ToLower(cfg.Log.LogLevel)
 	} else {
 		minLogLevel = "info"
 	}
 
-	if cfg != nil && cfg.Log != (entities.LogConfig{}) {
+	if cfg != nil && cfg.Log != (models.LogConfig{}) {
 		switch strings.ToLower(cfg.Log.LogType) {
 		case "loki":
 			loggerImpl = NewLokiLogger(service, cfg.Loki)
@@ -154,6 +163,15 @@ func Init(service string, cfg *entities.AppConfig) {
 	logChannelCapacity.Set(float64(cap(logChan)))
 	wg.Add(1)
 	go logProcessor()
+
+	isInitialized = true
+}
+
+// IsInitialized 检查日志系统是否已初始化
+func IsInitialized() bool {
+	initMux.Lock()
+	defer initMux.Unlock()
+	return isInitialized
 }
 
 func logProcessor() {

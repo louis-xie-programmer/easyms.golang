@@ -20,11 +20,11 @@ var (
 // 定义了用户信息管理的标准方法
 type UserDetailsService interface {
 	// LoadUserByUsername 根据用户名加载用户详情
-	LoadUserByUsername(username string) (*UserDetails, error)
+	LoadUserByUsername(username string) (*User, error)
 	// GetUserAllowedScopes 获取用户允许的scope列表
 	GetUserAllowedScopes(userId int64) []string
 	// CreateUser 创建 用户
-	CreateUserDetails(username, password string, authorities []string, clientId string) (*UserDetails, error)
+	CreateUserDetails(username, password string, authorities []string, clientId string) (*User, error)
 }
 
 // PostgresUserDetailsService 基于PostgreSQL的用户详情服务实现
@@ -49,8 +49,8 @@ func NewPostgresUserDetailsService(db db.Database) UserDetailsService {
 // 返回值:
 //   - *UserDetails: 用户详情
 //   - error: 操作成功返回nil，失败返回具体错误
-func (service *PostgresUserDetailsService) LoadUserByUsername(username string) (*UserDetails, error) {
-	var user UserDetails
+func (service *PostgresUserDetailsService) LoadUserByUsername(username string) (*User, error) {
+	var user User
 	err := service.db.GetDB().Where("username = ?", username).First(&user).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -63,7 +63,7 @@ func (service *PostgresUserDetailsService) LoadUserByUsername(username string) (
 }
 
 func (service *PostgresUserDetailsService) GetUserAllowedScopes(userId int64) []string {
-	var user UserDetails
+	var user User
 	err := service.db.GetDB().Select("authorities").Where("user_id = ?", userId).First(&user).Error
 	if err != nil {
 		logger.Error(err, "Failed to get user allowed scopes", "auth-svc", "userId", userId)
@@ -72,9 +72,9 @@ func (service *PostgresUserDetailsService) GetUserAllowedScopes(userId int64) []
 	return user.GetAuthorities()
 }
 
-func (service *PostgresUserDetailsService) CreateUserDetails(username, password string, authorities []string, clientId string) (*UserDetails, error) {
+func (service *PostgresUserDetailsService) CreateUserDetails(username, password string, authorities []string, clientId string) (*User, error) {
 	var count int64
-	err := service.db.GetDB().Model(&UserDetails{}).Where("username = ?", username).Count(&count).Error
+	err := service.db.GetDB().Model(&User{}).Where("username = ?", username).Count(&count).Error
 	if err != nil {
 		logger.Error(err, "Failed to check if user exists", "auth-svc", "username", username)
 		return nil, err
@@ -83,17 +83,15 @@ func (service *PostgresUserDetailsService) CreateUserDetails(username, password 
 		return nil, fmt.Errorf("user %s already exists", username)
 	}
 
-	userDetails := &UserDetails{
+	userDetails := &User{
 		Username:    username,
-		Password:    password, // 临时存储明文
 		Authorities: strings.Join(authorities, ","),
 	}
 
-	if err := userDetails.HashPassword(); err != nil {
+	if err := userDetails.SetPassword(password); err != nil {
 		logger.Error(err, "Failed to hash password", "auth-svc", "username", username)
 		return nil, err
 	}
-	userDetails.Password = "" // 清除明文密码
 
 	// 使用事务确保用户和权限关系的一致性
 	err = service.db.RunInTransaction(func(tx db.TxTransaction) error {
@@ -102,7 +100,7 @@ func (service *PostgresUserDetailsService) CreateUserDetails(username, password 
 		}
 
 		userAuthority := &UserAuthority{
-			UserID:   userDetails.UserId,
+			UserID:   userDetails.ID,
 			ClientID: clientId,
 			Scope:    userDetails.Authorities,
 		}

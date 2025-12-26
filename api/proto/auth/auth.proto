@@ -11,8 +11,8 @@ option go_package = "easyms.golang/api/proto/auth";
 // 消息体定义
 // -----------------
 
-message UserDetails {
-    int64 user_id = 1;
+message User {
+    int64 id = 1;
     string username = 2;
     string authorities = 3;
 }
@@ -46,7 +46,7 @@ message VerifyRequest {
 
 message VerifyResponse {
     bool valid = 1;
-    UserDetails user = 2;
+    User user = 2;
     ClientDetails client = 3;
 }
 

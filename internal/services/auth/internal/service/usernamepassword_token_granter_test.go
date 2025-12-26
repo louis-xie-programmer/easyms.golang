@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"easyms/internal/services/auth/internal/consts"
-	"easyms/internal/shared/models"
+	. "easyms/internal/shared/models"
 	"errors"
 	"testing"
 	"time"
@@ -19,7 +19,7 @@ type mockUserDetailsService struct {
 }
 
 // LoadUserByUsername 是接口方法的模拟实现。
-func (m *mockUserDetailsService) LoadUserByUsername(username string) (*model.UserDetails, error) {
+func (m *mockUserDetailsService) LoadUserByUsername(username string) (*User, error) {
 	// m.Called 会记录这次调用，并返回我们在测试用例中用 .On() 和 .Return() 预设的结果。
 	args := m.Called(username)
 	// 如果预设的第一个返回值为 nil，说明我们想模拟一个错误场景。
@@ -27,7 +27,7 @@ func (m *mockUserDetailsService) LoadUserByUsername(username string) (*model.Use
 		return nil, args.Error(1)
 	}
 	// 否则，返回预设的用户详情对象。
-	return args.Get(0).(*model.UserDetails), args.Error(1)
+	return args.Get(0).(*User), args.Error(1)
 }
 
 func (m *mockUserDetailsService) GetUserAllowedScopes(userId int64) []string {
@@ -35,12 +35,12 @@ func (m *mockUserDetailsService) GetUserAllowedScopes(userId int64) []string {
 	return args.Get(0).([]string)
 }
 
-func (m *mockUserDetailsService) CreateUserDetails(username, password string, authorities []string, clientId string) (*model.UserDetails, error) {
+func (m *mockUserDetailsService) CreateUserDetails(username, password string, authorities []string, clientId string) (*User, error) {
 	args := m.Called(username, password, authorities, clientId)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*model.UserDetails), args.Error(1)
+	return args.Get(0).(*User), args.Error(1)
 }
 
 // mockTokenService 实现了 TokenService 接口，用于模拟令牌服务的行为。
@@ -49,25 +49,25 @@ type mockTokenService struct {
 }
 
 // CreateAccessToken 是接口方法的模拟实现。
-func (m *mockTokenService) CreateAccessToken(oauth2Details *model.OAuth2Details) (*model.OAuth2Token, error) {
+func (m *mockTokenService) CreateAccessToken(oauth2Details *OAuth2Details) (*OAuth2Token, error) {
 	args := m.Called(oauth2Details)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*model.OAuth2Token), args.Error(1)
+	return args.Get(0).(*OAuth2Token), args.Error(1)
 }
 
 // 其他我们在这个测试中不关心的 TokenService 方法，可以留空或返回 nil。
-func (m *mockTokenService) GetOAuth2DetailsByAccessToken(tokenValue string) (*model.OAuth2Details, error) {
+func (m *mockTokenService) GetOAuth2DetailsByAccessToken(tokenValue string) (*OAuth2Details, error) {
 	return nil, nil
 }
-func (m *mockTokenService) RefreshAccessToken(refreshTokenValue string) (*model.OAuth2Token, error) {
+func (m *mockTokenService) RefreshAccessToken(refreshTokenValue string) (*OAuth2Token, error) {
 	return nil, nil
 }
-func (m *mockTokenService) ReadAccessToken(tokenValue string) (*model.OAuth2Token, error) {
+func (m *mockTokenService) ReadAccessToken(tokenValue string) (*OAuth2Token, error) {
 	return nil, nil
 }
-func (m *mockTokenService) ReadOAuth2Details(tokenValue string) (*model.OAuth2Details, error) {
+func (m *mockTokenService) ReadOAuth2Details(tokenValue string) (*OAuth2Details, error) {
 	return nil, nil
 }
 
@@ -82,25 +82,24 @@ func TestUsernamePasswordTokenGranter_Grant_Success(t *testing.T) {
 	granter := NewUsernamePasswordTokenGranter("password", mockUserSvc, mockTokenSvc)
 
 	// 准备一个用于测试的、正确的用户对象。
-	correctUser := &model.UserDetails{
+	correctUser := &User{
 		Username: "testuser",
-		Password: "password", // 设置明文密码，以便 HashPassword 能正确工作。
 	}
 	// 为该用户生成密码哈希。
-	err := correctUser.HashPassword()
+	err := correctUser.SetPassword("password")
 	assert.NoError(t, err) // 断言哈希过程没有出错。
 
 	// 准备一个模拟的客户端信息。
-	clientDetails := &model.ClientDetails{ClientId: "test-client", AllowedAuthorities: "read,write"}
+	clientDetails := &ClientDetails{ClientId: "test-client", AllowedAuthorities: "read,write"}
 
 	// 准备模拟的HTTP请求内容。
-	tokenRequest := &model.TokenRequest{
+	tokenRequest := &TokenRequest{
 		Username: "testuser",
 		Password: "password",
 	}
 
 	// 准备我们期望 TokenService 最终返回的令牌。
-	expectedToken := &model.OAuth2Token{TokenValue: "success-token", ExpiresTime: func() *time.Time { t := time.Now().Add(time.Hour); return &t }()}
+	expectedToken := &OAuth2Token{TokenValue: "success-token", ExpiresTime: func() *time.Time { t := time.Now().Add(time.Hour); return &t }()}
 
 	// --- 编写“剧本”：为 Mock 对象预设行为 ---
 
@@ -109,13 +108,13 @@ func TestUsernamePasswordTokenGranter_Grant_Success(t *testing.T) {
 	mockUserSvc.On("LoadUserByUsername", "testuser").Return(correctUser, nil)
 
 	// 预设：当 mockUserSvc 的 GetUserAllowedScopes 方法被调用时，返回一个权限列表。
-	mockUserSvc.On("GetUserAllowedScopes", correctUser.UserId).Return([]string{"read", "write"})
+	mockUserSvc.On("GetUserAllowedScopes", correctUser.ID).Return([]string{"read", "write"})
 
 	// 预设：当 mockTokenSvc 的 CreateAccessToken 方法被调用时，我们期望它返回预设的 expectedToken。
 	// 关键点：我们使用 mock.MatchedBy 来自定义参数的匹配逻辑。
 	// 这是因为 CreateAccessToken 的参数 oauth2Details 是在 Grant 方法内部动态构建的，我们无法提前预知其指针地址。
 	// 但我们可以通过这个函数来检查其内容是否符合预期。
-	mockTokenSvc.On("CreateAccessToken", mock.MatchedBy(func(details *model.OAuth2Details) bool {
+	mockTokenSvc.On("CreateAccessToken", mock.MatchedBy(func(details *OAuth2Details) bool {
 		// 我们只关心 Scopes 是否被正确计算，以及 Client 和 User 信息是否被正确传递。
 		return details.Client.ClientId == "test-client" &&
 			details.User.Username == "testuser" &&
@@ -149,8 +148,8 @@ func TestUsernamePasswordTokenGranter_Grant_UserNotFound(t *testing.T) {
 	mockTokenSvc := new(mockTokenService)
 	granter := NewUsernamePasswordTokenGranter("password", mockUserSvc, mockTokenSvc)
 
-	clientDetails := &model.ClientDetails{ClientId: "test-client"}
-	tokenRequest := &model.TokenRequest{Username: "unknownuser", Password: "password"}
+	clientDetails := &ClientDetails{ClientId: "test-client"}
+	tokenRequest := &TokenRequest{Username: "unknownuser", Password: "password"}
 
 	// 预设“剧本”：当加载一个不存在的用户 "unknownuser" 时，返回一个错误。
 	mockUserSvc.On("LoadUserByUsername", "unknownuser").Return(nil, errors.New("user not found"))
@@ -178,12 +177,12 @@ func TestUsernamePasswordTokenGranter_Grant_WrongPassword(t *testing.T) {
 	granter := NewUsernamePasswordTokenGranter("password", mockUserSvc, mockTokenSvc)
 
 	// 准备一个密码为 "password" 的用户。
-	correctUser := &model.UserDetails{Username: "testuser", Password: "password"}
-	_ = correctUser.HashPassword()
+	correctUser := &User{Username: "testuser"}
+	_ = correctUser.SetPassword("password")
 
-	clientDetails := &model.ClientDetails{ClientId: "test-client"}
+	clientDetails := &ClientDetails{ClientId: "test-client"}
 	// 准备一个密码错误的请求。
-	tokenRequest := &model.TokenRequest{Username: "testuser", Password: "wrongpassword"}
+	tokenRequest := &TokenRequest{Username: "testuser", Password: "wrongpassword"}
 
 	// 预设“剧本”：当加载用户 "testuser" 时，成功返回用户信息。
 	mockUserSvc.On("LoadUserByUsername", "testuser").Return(correctUser, nil)

@@ -4,7 +4,7 @@ package config
 
 import (
 	"easyms/internal/shared/discovery"
-	"easyms/internal/shared/entities"
+	"easyms/internal/shared/models"
 	"fmt"
 	"log"
 	"strings"
@@ -39,9 +39,9 @@ func NewConsulConfig(client *discovery.Discovery, serviceName, keyPath, env stri
 	}
 }
 
-func (cc *ConsulConfig) OnChange() func(newConfig *entities.AppConfig) {
+func (cc *ConsulConfig) OnChange() func(newConfig *models.AppConfig) {
 	// 更新配置
-	return func(newConfig *entities.AppConfig) {
+	return func(newConfig *models.AppConfig) {
 		cc.configMgr.UpdateConfig(newConfig)
 	}
 }
@@ -54,7 +54,7 @@ func (cc *ConsulConfig) LoadAppConfig() error {
 	// consul appConfig
 	appKeys := GetConsulAppConfigKey(cc.AppKeyPath, cc.ServerName, cc.Env)
 
-	newConfig := &entities.AppConfig{}
+	newConfig := &models.AppConfig{}
 	for _, key := range appKeys {
 		val, err := cc.Client.Get(key)
 		if err != nil {
@@ -63,7 +63,7 @@ func (cc *ConsulConfig) LoadAppConfig() error {
 		if val == "" {
 			return fmt.Errorf("key not found: %s", key)
 		}
-		var cfg entities.AppConfig
+		var cfg models.AppConfig
 		// 解析配置
 		err = yaml.Unmarshal([]byte(val), &cfg)
 		if err != nil {

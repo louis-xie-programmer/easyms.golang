@@ -1,4 +1,4 @@
-package model
+package models
 
 import "time"
 
@@ -20,7 +20,7 @@ func (oauth2Token *OAuth2Token) IsExpired() bool {
 
 type OAuth2Details struct {
 	Client *ClientDetails
-	User   *UserDetails
+	User   *User
 	Scopes string
 }
 

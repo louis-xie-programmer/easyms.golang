@@ -3,7 +3,7 @@ package config
 
 import (
 	"easyms/internal/shared/discovery"
-	"easyms/internal/shared/entities"
+	"easyms/internal/shared/models"
 	"fmt"
 	"reflect"
 	"sync"
@@ -19,7 +19,7 @@ type ConfigWatcher struct {
 	keyPath     string
 	serverName  string
 	env         string
-	onChange    func(*entities.AppConfig)
+	onChange    func(*models.AppConfig)
 	stopCh      chan struct{}
 	ticker      *time.Ticker
 	mu          sync.RWMutex
@@ -37,7 +37,7 @@ type ConfigWatcherInterface interface {
 func NewConfigWatcher(
 	client *discovery.Discovery,
 	keyPath, serverName, env string,
-	onChange func(*entities.AppConfig)) *ConfigWatcher {
+	onChange func(*models.AppConfig)) *ConfigWatcher {
 	return &ConfigWatcher{
 		client:      client,
 		keyPath:     keyPath,
@@ -84,7 +84,7 @@ func (cw *ConfigWatcher) checkConfigChange() {
 	appKeys := GetConsulAppConfigKey(cw.keyPath, cw.serverName, cw.env)
 
 	// 临时存储新配置
-	newConfig := &entities.AppConfig{}
+	newConfig := &models.AppConfig{}
 
 	// 是否有配置发生变化
 	configChanged := false
@@ -130,7 +130,7 @@ func (cw *ConfigWatcher) checkConfigChange() {
 				continue
 			}
 
-			var cfg entities.AppConfig
+			var cfg models.AppConfig
 			// 解析配置
 			err = yaml.Unmarshal([]byte(val), &cfg)
 			if err != nil {
@@ -152,7 +152,7 @@ func (cw *ConfigWatcher) checkConfigChange() {
 }
 
 // isConfigChanged 检查配置是否发生变化
-func (cw *ConfigWatcher) isConfigChanged(newConfig *entities.AppConfig) bool {
+func (cw *ConfigWatcher) isConfigChanged(newConfig *models.AppConfig) bool {
 	currentConfig := GetAppConfig()
 	if currentConfig == nil {
 		return true

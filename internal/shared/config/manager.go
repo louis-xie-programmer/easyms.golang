@@ -4,7 +4,7 @@ package config
 
 import (
 	"easyms/internal/shared/discovery"
-	"easyms/internal/shared/entities"
+	"easyms/internal/shared/models"
 	"fmt"
 	"sync"
 	"time"
@@ -17,7 +17,7 @@ var now = time.Now // For testability
 
 // ConfigurationManager 配置管理器，统一管理配置的加载、合并和更新
 type ConfigurationManager struct {
-	appConfig  *entities.AppConfig
+	appConfig  *models.AppConfig
 	configLock sync.RWMutex
 	provider   AppConfigProvider
 	watcher    ConfigWatcherInterface
@@ -26,7 +26,7 @@ type ConfigurationManager struct {
 // NewConfigurationManager 创建新的配置管理器
 func NewConfigurationManager(provider AppConfigProvider) *ConfigurationManager {
 	return &ConfigurationManager{
-		appConfig: &entities.AppConfig{},
+		appConfig: &models.AppConfig{},
 		provider:  provider,
 	}
 }
@@ -37,30 +37,30 @@ func (cm *ConfigurationManager) LoadConfig() error {
 }
 
 // GetConfig 获取当前配置
-func (cm *ConfigurationManager) GetConfig() *entities.AppConfig {
+func (cm *ConfigurationManager) GetConfig() *models.AppConfig {
 	cm.configLock.RLock()
 	defer cm.configLock.RUnlock()
 	return cm.appConfig
 }
 
 // UpdateConfig 更新配置
-func (cm *ConfigurationManager) UpdateConfig(newConfig *entities.AppConfig) {
+func (cm *ConfigurationManager) UpdateConfig(newConfig *models.AppConfig) {
 	cm.configLock.Lock()
 	defer cm.configLock.Unlock()
 	cm.appConfig = newConfig
 }
 
 // MergeConfigs 合并配置，将source配置合并到target配置中
-func (cm *ConfigurationManager) MergeConfigs(target, source *entities.AppConfig) error {
+func (cm *ConfigurationManager) MergeConfigs(target, source *models.AppConfig) error {
 	// Use deep merge to avoid losing partial configurations.
 	return mergo.Merge(target, source, mergo.WithOverride)
 }
 
 // EnsureBasicConfig 确保配置包含基本项
-func (cm *ConfigurationManager) EnsureBasicConfig(config *entities.AppConfig, isGateway bool) {
+func (cm *ConfigurationManager) EnsureBasicConfig(config *models.AppConfig, isGateway bool) {
 	// 确保至少有基本配置
-	if config.Log == (entities.LogConfig{}) {
-		config.Log = entities.LogConfig{
+	if config.Log == (models.LogConfig{}) {
+		config.Log = models.LogConfig{
 			LogLevel: "info",
 			LogType:  "zerolog",
 		}
@@ -68,7 +68,7 @@ func (cm *ConfigurationManager) EnsureBasicConfig(config *entities.AppConfig, is
 
 	// 网关服务不需要数据库配置
 	if isGateway {
-		config.Database = entities.DatabaseConfig{}
+		config.Database = models.DatabaseConfig{}
 	}
 }
 
@@ -90,7 +90,7 @@ func (cm *ConfigurationManager) SaveConfigVersion(d *discovery.Discovery, server
 	versionID := fmt.Sprintf("%s-%d", serverName, getCurrentTimestamp())
 
 	// 创建版本信息
-	versionInfo := entities.ConfigVersion{
+	versionInfo := models.ConfigVersion{
 		VersionID:   versionID,
 		Timestamp:   now(),
 		Description: description,
@@ -114,7 +114,7 @@ func (cm *ConfigurationManager) SaveConfigVersion(d *discovery.Discovery, server
 }
 
 // GetConfigVersions 获取配置版本列表
-func (cm *ConfigurationManager) GetConfigVersions(d *discovery.Discovery, serverName, env string, isGateway bool) ([]*entities.ConfigVersion, error) {
+func (cm *ConfigurationManager) GetConfigVersions(d *discovery.Discovery, serverName, env string, isGateway bool) ([]*models.ConfigVersion, error) {
 	// 构建键前缀
 	prefix := fmt.Sprintf("easyms/versions/%s/%s/", env, serverName)
 
@@ -125,21 +125,21 @@ func (cm *ConfigurationManager) GetConfigVersions(d *discovery.Discovery, server
 	}
 
 	// 获取所有版本信息
-	versions := make([]*entities.ConfigVersion, 0, len(keys))
+	versions := make([]*models.ConfigVersion, 0, len(keys))
 	for _, key := range keys {
 		val, err := d.Get(key)
 		if err != nil {
 			return nil, err
 		}
 
-		var version entities.ConfigVersion
+		var version models.ConfigVersion
 		err = yaml.Unmarshal([]byte(val), &version)
 		if err != nil {
 			return nil, err
 		}
 
 		// 验证配置
-		var config entities.AppConfig
+		var config models.AppConfig
 		err = yaml.Unmarshal([]byte(version.ConfigData), &config)
 		if err != nil {
 			return nil, err
@@ -152,7 +152,7 @@ func (cm *ConfigurationManager) GetConfigVersions(d *discovery.Discovery, server
 }
 
 // GetConfigVersion retrieves a specific configuration version.
-func (cm *ConfigurationManager) GetConfigVersion(d *discovery.Discovery, serverName, env, versionID string) (*entities.ConfigVersion, error) {
+func (cm *ConfigurationManager) GetConfigVersion(d *discovery.Discovery, serverName, env, versionID string) (*models.ConfigVersion, error) {
 	// 获取版本信息
 	key := fmt.Sprintf("easyms/versions/%s/%s/%s", env, serverName, versionID)
 	val, err := d.Get(key)
@@ -163,7 +163,7 @@ func (cm *ConfigurationManager) GetConfigVersion(d *discovery.Discovery, serverN
 		return nil, fmt.Errorf("version %s not found", versionID)
 	}
 
-	var version entities.ConfigVersion
+	var version models.ConfigVersion
 	if err := yaml.Unmarshal([]byte(val), &version); err != nil {
 		return nil, err
 	}

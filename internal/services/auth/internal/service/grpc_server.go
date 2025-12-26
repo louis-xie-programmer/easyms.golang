@@ -70,10 +70,10 @@ func (s *grpcServer) VerifyToken(ctx context.Context, req *auth2.VerifyRequest) 
 	}
 
 	// 转换 UserDetails
-	var userDetails *auth2.UserDetails
+	var userDetails *auth2.User
 	if oauth2Details.User != nil {
-		userDetails = &auth2.UserDetails{
-			UserId:      oauth2Details.User.UserId,
+		userDetails = &auth2.User{
+			Id:          oauth2Details.User.ID,
 			Username:    oauth2Details.User.Username,
 			Authorities: oauth2Details.User.Authorities,
 		}

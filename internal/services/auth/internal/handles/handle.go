@@ -3,7 +3,7 @@ package handles
 import (
 	"easyms/internal/services/auth/internal/consts"
 	"easyms/internal/services/auth/internal/service"
-	model "easyms/internal/shared/models"
+	. "easyms/internal/shared/models"
 	"errors"
 	"net/http"
 	"strings"
@@ -12,7 +12,7 @@ import (
 )
 
 // respondWithToken 封装了统一的令牌响应逻辑
-func respondWithToken(c *gin.Context, token *model.OAuth2Token, err error) {
+func respondWithToken(c *gin.Context, token *OAuth2Token, err error) {
 	if err != nil {
 		// 根据错误类型返回不同的HTTP状态码
 		if errors.Is(err, consts.ErrInvalidClient) || errors.Is(err, consts.ErrInvalidUsernameAndPasswordRequest) {
@@ -23,7 +23,7 @@ func respondWithToken(c *gin.Context, token *model.OAuth2Token, err error) {
 		return
 	}
 
-	c.JSON(http.StatusOK, model.TokenResponse{
+	c.JSON(http.StatusOK, TokenResponse{
 		AccessToken:  token,
 		RefreshToken: token.RefreshToken, // RefreshToken可能为nil，这没问题
 	})
@@ -32,7 +32,7 @@ func respondWithToken(c *gin.Context, token *model.OAuth2Token, err error) {
 // MakeTokenEndpoint 用于生成访问令牌(客户端公共令牌)
 func MakeTokenEndpoint(svc service.TokenGranter, clientdetailsService service.ClientDetailsService) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		req := &model.ClientTokenRequest{}
+		req := &ClientTokenRequest{}
 		if err := c.ShouldBindJSON(req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
@@ -59,7 +59,7 @@ func MakeTokenEndpoint(svc service.TokenGranter, clientdetailsService service.Cl
 			return
 		}
 
-		token, err := svc.Grant(c, req.GrantType, clientDetails, &model.TokenRequest{
+		token, err := svc.Grant(c, req.GrantType, clientDetails, &TokenRequest{
 			GrantType: req.GrantType,
 		})
 		respondWithToken(c, token, err)
@@ -90,7 +90,7 @@ func VerifyTokenEndpoint(tokenService service.TokenService) gin.HandlerFunc {
 // RegisterClientEndPoint 注册客户端端点
 func RegisterClientEndPoint(service service.ClientDetailsService) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		req := &model.RegisterClientRequest{}
+		req := &RegisterClientRequest{}
 		if err := ctx.ShouldBindJSON(req); err != nil {
 			ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request", "detail": err.Error()})
 			return
@@ -103,7 +103,7 @@ func RegisterClientEndPoint(service service.ClientDetailsService) gin.HandlerFun
 			return
 		}
 
-		ctx.JSON(http.StatusOK, model.RegisterClientResponse{
+		ctx.JSON(http.StatusOK, RegisterClientResponse{
 			ClientId:     clientDetails.ClientId,
 			ClientSecret: clientDetails.ClientSecret,
 		})
@@ -113,7 +113,7 @@ func RegisterClientEndPoint(service service.ClientDetailsService) gin.HandlerFun
 // RegisterUserEndPoint 注册用户端点
 func RegisterUserEndPoint(service service.UserDetailsService, authorities []string) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		req := &model.RegisterUserRequest{}
+		req := &RegisterUserRequest{}
 		if err := ctx.ShouldBindJSON(req); err != nil {
 			ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request", "detail": err.Error()})
 			return
@@ -128,7 +128,7 @@ func RegisterUserEndPoint(service service.UserDetailsService, authorities []stri
 			ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: client details not found in context"})
 			return
 		}
-		clientDetail, ok := val.(*model.ClientDetails)
+		clientDetail, ok := val.(*ClientDetails)
 		if !ok {
 			ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: client details have wrong type"})
 			return
@@ -146,7 +146,7 @@ func RegisterUserEndPoint(service service.UserDetailsService, authorities []stri
 // LoginEndPoint 处理登录请求, 需要带客户端共享令牌
 func LoginEndPoint(userDetailsService service.UserDetailsService, tokenService service.TokenService) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		req := &model.LoginRequest{}
+		req := &LoginRequest{}
 		if err := c.ShouldBindJSON(req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
@@ -175,13 +175,13 @@ func LoginEndPoint(userDetailsService service.UserDetailsService, tokenService s
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Client details not found in context, middleware may have failed"})
 			return
 		}
-		clientDetails, ok := val.(*model.ClientDetails)
+		clientDetails, ok := val.(*ClientDetails)
 		if !ok {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Client details in context have wrong type"})
 			return
 		}
 
-		token, err := tokenService.CreateAccessToken(&model.OAuth2Details{
+		token, err := tokenService.CreateAccessToken(&OAuth2Details{
 			User:   userDetails,
 			Client: clientDetails,
 		})
@@ -193,7 +193,7 @@ func LoginEndPoint(userDetailsService service.UserDetailsService, tokenService s
 // RefreshTokenEndpoint 处理刷新令牌请求(分用户令牌，客户端公共令牌，由中间件来区分)
 func RefreshTokenEndpoint(tokenService service.TokenService) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		req := &model.RefreshTokenRequest{}
+		req := &RefreshTokenRequest{}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return

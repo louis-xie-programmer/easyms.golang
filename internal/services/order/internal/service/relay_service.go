@@ -4,7 +4,7 @@ import (
 	"context"
 	"easyms/internal/shared/db"
 	"easyms/internal/shared/logger"
-	"easyms/internal/shared/models"
+	. "easyms/internal/shared/models"
 	"easyms/internal/shared/mq"
 	"github.com/google/uuid"
 	"time"
@@ -52,7 +52,7 @@ func (s *RelayService) Stop() {
 
 // processOutbox 从数据库中获取一批事件，发布它们，然后删除它们
 func (s *RelayService) processOutbox() {
-	var events []model.OutboxEvent
+	var events []OutboxEvent
 	// 在一个事务中完成“捞取”和“删除”，防止被多个实例重复处理
 	err := s.db.RunInTransaction(func(tx db.TxTransaction) error {
 		// 使用 FOR UPDATE 来锁定行，防止并发问题
@@ -84,7 +84,7 @@ func (s *RelayService) processOutbox() {
 		for i, event := range events {
 			eventIDs[i] = event.ID
 		}
-		err := tx.Delete(&model.OutboxEvent{}, "id IN ?", eventIDs)
+		err := tx.Delete(&OutboxEvent{}, "id IN ?", eventIDs)
 		if err != nil {
 			return err
 		}
