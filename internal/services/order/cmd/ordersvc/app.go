@@ -62,7 +62,8 @@ func InitializeApp(serverName string, env string) (*App, func(), error) {
 	}
 
 	// --- 6. Service Layer Initialization ---
-	orderService := service.NewOrderService(dbase)
+	orderServiceLogger := logger.With("component", "order_service")
+	orderService := service.NewOrderService(dbase, orderServiceLogger)
 	relayService := outbox_relay.NewRelayService(dbase, publisher, 10*time.Second)
 
 	// --- 7. Interface Layer Initialization ---

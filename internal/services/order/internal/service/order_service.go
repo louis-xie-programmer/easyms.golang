@@ -5,9 +5,12 @@ import (
 	"easyms/internal/services/order/internal/constants"
 	"easyms/internal/shared/db"
 	"easyms/internal/shared/events"
+	"easyms/internal/shared/logger"
 	"easyms/internal/shared/models"
 	"fmt"
 )
+
+const serviceName = "order_service"
 
 // OrderService defines the interface for the order service.
 type OrderService interface {
@@ -16,13 +19,15 @@ type OrderService interface {
 
 // orderService implements the OrderService interface.
 type orderService struct {
-	db db.Database
+	db  db.Database
+	log *logger.Logger
 }
 
 // NewOrderService creates a new order service instance.
-func NewOrderService(db db.Database) OrderService {
+func NewOrderService(db db.Database, log *logger.Logger) OrderService {
 	return &orderService{
-		db: db,
+		db:  db,
+		log: log,
 	}
 }
 
@@ -31,15 +36,18 @@ func (s *orderService) CreateOrder(ctx context.Context, order *models.Order) err
 	return s.db.RunInTransaction(ctx, func(tx db.TxTransaction) error {
 		// 1. Create the order and order items within the transaction.
 		if err := tx.Insert(ctx, order); err != nil {
+			s.log.ErrorWithContext(ctx, err, "failed to create order in db", serviceName)
 			return fmt.Errorf("failed to create order in db: %w", err)
 		}
 
 		// 2. Create and store the outbox event using the shared event publisher.
 		err := events.CreateAndStoreEvent(ctx, tx, constants.OrderTopic, constants.OrderCreatedEvent, order)
 		if err != nil {
+			s.log.ErrorWithContext(ctx, err, "failed to create and store outbox event", serviceName)
 			return fmt.Errorf("failed to create and store outbox event: %w", err)
 		}
 
+		s.log.InfoWithContext(ctx, "successfully created order and outbox event", serviceName, "order_id", order.ID)
 		return nil // The transaction will be committed automatically here.
 	})
 }
