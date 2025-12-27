@@ -5,6 +5,8 @@ import (
 	"easyms/internal/shared/logger"
 	"easyms/internal/shared/models"
 	"fmt"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -93,6 +95,10 @@ func (p *ProxyPlugin) Execute(ctx *plugin.Context) {
 		req.URL.Path = upstreamURL.Path
 		req.Host = upstreamURL.Host
 		req.RequestURI = ""
+
+		// Inject Trace Context into the downstream request headers.
+		// This allows the upstream service to extract the trace ID and continue the trace.
+		otel.GetTextMapPropagator().Inject(req.Context(), propagation.HeaderCarrier(req.Header))
 	}
 
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
