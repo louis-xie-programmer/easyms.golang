@@ -1,99 +1,97 @@
 // main.go API网关服务主程序
-// 主要功能：
-// 1. 初始化服务配置
-// 2. 启动服务发现客户端
-// 3. 监听目标服务
-// 4. 启动HTTP服务
-// 5. 提供反向代理和负载均衡功能
 package main
 
 import (
 	"easyms/internal/platform/gateway"
+	"easyms/internal/platform/gateway/plugins"
 	"easyms/internal/shared/config"
 	"easyms/internal/shared/discovery"
 	"easyms/internal/shared/logger"
 	"fmt"
+	"log"
 	"net/http"
 )
 
-// main API网关服务入口函数
 func main() {
-	// 获取环境变量
-	// 网关服务名称和端口
+	// --- 1. 初始化核心依赖 ---
 	serverName := "gateway"
 	port := 10000
 
 	// 初始化应用配置存储
-	// 读取 configs/app.yaml 配置文件
 	cfgStore, err := config.InitAppConfigStore()
 	if err != nil {
-		logger.Error(err, "Failed to initialize app config store", serverName)
+		log.Fatalf("Failed to initialize app config store: %v", err)
 	}
 
-	// 初始化 Consul 服务发现客户端
-	// 连接到Consul服务注册与发现中心
+	// 初始化服务发现
 	sd, err := discovery.NewServiceDiscovery(cfgStore.Consul.Host)
 	if err != nil {
-		logger.Error(err, "Failed to create consul client", serverName)
+		log.Fatalf("Failed to create service discovery client: %v", err)
 	}
-
-	// 监听多个服务的变化
-	// 启动goroutine监听user-svc和auth-svc服务实例变化
 	sd.WatchService("user-svc")
 	sd.WatchService("auth-svc")
-	sd.WatchService("order-svc") // 新增对订单服务的监听
+	sd.WatchService("order-svc")
 
-	// 创建 Discovery 客户端用于配置加载
-	discoveryClient, err := discovery.NewDiscovery(cfgStore.Consul.Host)
-	if err != nil {
-		logger.Error(err, "Failed to create consul discovery client", serverName)
+	// 加载应用配置 (简化版，实际应处理本地和远程)
+	provider := config.NewLocalConfig(serverName, cfgStore.Env)
+	if err := provider.LoadAppConfig(); err != nil {
+		log.Fatalf("Failed to load app config: %v", err)
 	}
-
-	var provider config.AppConfigProvider
-
-	// 加载服务配置
-	// 根据配置类型（本地或Consul）加载服务配置
-	// 加载应用配置
-	if cfgStore.StoreType == "consul" {
-		// 使用Consul配置提供者
-		provider = config.NewConsulConfig(discoveryClient, serverName, cfgStore.Consul.KeyPath, cfgStore.Env)
-		err := provider.LoadAppConfig()
-		if err != nil {
-			logger.Error(err, "Failed to load app config", serverName)
-			panic(err)
-		}
-		// 动态监听配置文件并更新服务
-		watch := config.NewConfigWatcher(discoveryClient, cfgStore.Consul.KeyPath, serverName, cfgStore.Env, provider.OnChange())
-		go watch.Start()
-	} else {
-		// 使用本地配置提供者
-		// 从本地配置文件加载配置
-		provider = config.NewLocalConfig(serverName, cfgStore.Env)
-		err := provider.LoadAppConfig()
-		if err != nil {
-			logger.Error(err, "Failed to load local app config", serverName)
-			panic(err)
-		}
-	}
-
-	// 获取应用配置
 	appConfig := config.GetAppConfig()
 
 	// 初始化日志系统
-	// 根据配置初始化日志系统（本地或Loki）
 	logger.Init(serverName, appConfig)
 
-	// 创建API网关实例
-	// 初始化网关，传入服务发现客户端
-	gw := gateway.NewGateway(sd)
+	// --- 2. 创建插件化网关 ---
+	gw := gateway.NewGateway()
 
-	// 更新网关配置
-	gw.LoadConfig("./internal/platform/gateway/internal/configs/gateway.yaml")
+	// --- 3. 初始化并注册所有插件 ---
 
-	// 启动HTTP服务
-	// 启动网关HTTP服务，监听指定端口
-	logger.Info("Starting gateway server", serverName, "port", port)
-	if err := http.ListenAndServe(fmt.Sprintf(":%d", port), gw); err != nil {
+	// Mock Plugin (新添加)
+	mockPlugin := plugins.NewMockPlugin()
+
+	// Auth Plugin
+	// 注意：这里的地址应该是通过服务发现动态获取的
+	//authSvcAddr := "localhost:10001" // 暂时硬编码
+	//authConn, err := grpc.Dial(authSvcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithDefaultServiceConfig(`{"loadBalancingPolicy":"round_robin"}`))
+	//if err != nil {
+	//	logger.Error(err, "Failed to connect to auth-svc via gRPC", serverName)
+	//}
+	//authPlugin := plugins.NewAuthPlugin(authConn)
+
+	// RateLimit Plugin (使用默认配置)
+	rateLimitPlugin := plugins.NewRateLimitPlugin(nil)
+
+	// Routing Plugin (可以从配置文件加载路由规则)
+	routes := []plugins.Route{
+		{PathPrefix: "/api/orders", ServiceName: "order-svc", StripPrefix: true},
+		{PathPrefix: "/api/users", ServiceName: "user-svc", StripPrefix: true},
+	}
+	routingPlugin := plugins.NewRoutingPlugin(sd, routes)
+
+	// CircuitBreaker Plugin
+	circuitBreakerPlugin := plugins.NewCircuitBreakerPlugin()
+
+	// Proxy Plugin (链的末端)
+	proxyPlugin := plugins.NewProxyPlugin()
+
+	// 注册所有插件
+	gw.AddPlugin(
+		mockPlugin, // 注册 Mock 插件
+		//authPlugin,
+		rateLimitPlugin,
+		routingPlugin,
+		circuitBreakerPlugin,
+		proxyPlugin,
+	)
+
+	// --- 4. 启动网关服务 ---
+	mux := http.NewServeMux()
+	mux.Handle("/", gw)
+	mux.HandleFunc("/health", gw.HealthCheck)
+
+	logger.Info("Starting plugin-based gateway server", serverName, "port", port)
+	if err := http.ListenAndServe(fmt.Sprintf(":%d", port), mux); err != nil {
 		logger.Error(err, "Failed to start gateway server", serverName)
 	}
 }
