@@ -25,7 +25,7 @@ type GatewayConfig struct {
 	RateLimit      *RateLimitConfig      `yaml:"rate_limit"`
 	CircuitBreaker *CircuitBreakerConfig `yaml:"circuit_breaker"`
 	Auth           *AuthConfig           `yaml:"auth"`
-	Proxy          *ProxyConfig          `yaml:"proxy,omitempty"` // Added Proxy config
+	Proxy          *ProxyConfig          `yaml:"proxy,omitempty"`
 }
 
 // RouteRule defines a routing rule.
@@ -51,14 +51,14 @@ type IPLimitRule struct {
 	CIDR  string     `yaml:"cidr"`
 	Rate  float64    `yaml:"rate"`
 	Burst int        `yaml:"burst"`
-	Net   *net.IPNet `yaml:"-"` // Ignored by YAML parser
+	Net   *net.IPNet `yaml:"-"`
 }
 
 type UALimitRule struct {
 	Pattern string         `yaml:"pattern"`
 	Rate    float64        `yaml:"rate"`
 	Burst   int            `yaml:"burst"`
-	Regexp  *regexp.Regexp `yaml:"-"` // Ignored by YAML parser
+	Regexp  *regexp.Regexp `yaml:"-"`
 }
 
 // CircuitBreakerConfig holds circuit breaker rules.
@@ -100,12 +100,9 @@ type AppConfig struct {
 	Cache    struct {
 		Redis RedisConfig `yaml:"redis,omitempty"`
 	} `yaml:"cache,omitempty"`
-	Consul ConsulConfig `yaml:"consul,omitempty"`
-
-	// Service-specific configurations
-	Gateway *GatewayConfig `yaml:"gateway,omitempty"`
-
-	ConfigLock sync.RWMutex `yaml:"-"`
+	Consul     ConsulConfig   `yaml:"consul,omitempty"`
+	Gateway    *GatewayConfig `yaml:"gateway,omitempty"`
+	ConfigLock sync.RWMutex   `yaml:"-"`
 }
 
 // AppConfigStore is used to parse the initial app.yaml.
@@ -124,14 +121,18 @@ type ConsulConfig struct {
 
 // ServerConfig defines server settings.
 type ServerConfig struct {
-	Host string    `yaml:"host"`
-	Port int       `yaml:"port"`
-	Tls  TLSConfig `yaml:"tls"`
+	Host     string    `yaml:"host"`
+	Port     int       `yaml:"port"`      // HTTP Port
+	GrpcPort int       `yaml:"grpc_port"` // gRPC Port
+	Tls      TLSConfig `yaml:"tls"`
 }
 
 func (s *ServerConfig) Validate() error {
 	if s.Port <= 0 || s.Port > 65535 {
-		return fmt.Errorf("invalid server port: %d, port must be between 1 and 65535", s.Port)
+		return fmt.Errorf("invalid server port: %d", s.Port)
+	}
+	if s.GrpcPort <= 0 || s.GrpcPort > 65535 {
+		return fmt.Errorf("invalid gRPC port: %d", s.GrpcPort)
 	}
 	return nil
 }
@@ -183,7 +184,6 @@ type TracingConfig struct {
 	Endpoint string `yaml:"endpoint"`
 }
 
-// ConfigVersion holds versioning info, useful for remote config management.
 type ConfigVersion struct {
 	VersionID   string    `json:"version_id"`
 	Timestamp   time.Time `json:"timestamp"`

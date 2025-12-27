@@ -12,308 +12,267 @@ import (
 	"easyms/internal/shared/db"
 	"easyms/internal/shared/discovery"
 	"easyms/internal/shared/logger"
-	"easyms/internal/shared/tracing" // 引入 tracing 包
+	"easyms/internal/shared/models"
+	"easyms/internal/shared/tracing"
+	"errors"
 	"fmt"
+	"github.com/hashicorp/consul/api"
+	"log"
 	"net"
 	"net/http"
+	"net/url"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
-	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin" // 引入 otelgin
-	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"  // 引入 otelgrpc
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// main 认证服务主函数
+const (
+	serverName = "auth-svc"
+)
+
+type application struct {
+	config         *models.AppConfig
+	discovery      *discovery.Discovery
+	db             db.Database
+	redis          *db.EasyRedis
+	tokenGranter   service.TokenGranter
+	tokenService   service.TokenService
+	clientSvc      service.ClientDetailsService
+	userSvc        service.UserDetailsService
+	tracerShutdown func(context.Context) error
+}
+
 func main() {
-	// 认证服务名称和端口
-	serverName := "auth-svc"
-
-	var err error
-
-	// 初始化应用配置存储
-	// 读取 configs/app.yaml 配置文件
-	cfgStore, err := config.InitAppConfigStore()
-	if err != nil || cfgStore == nil {
-		// 在日志系统初始化前，只能用fmt
-		fmt.Printf("Failed to initialize app config store: %v\n", err)
-		panic(err)
-	}
-	// 按需初始化Discovery客户端
-	// 添加检查确保cfgStore不为空再访问其属性
-	discoveryClient, err := discovery.NewDiscovery(cfgStore.Consul.Host)
+	app, err := initDependencies()
 	if err != nil {
-		fmt.Printf("Failed to create consul client: %v\n", err)
-		panic(err)
+		log.Fatalf("Failed to initialize dependencies: %v", err)
 	}
 
-	var provider config.AppConfigProvider
+	if app.discovery != nil {
+		httpPort := app.config.Server.Port
+		grpcPort := app.config.Server.GrpcPort
 
-	// 加载应用配置
-	if cfgStore.StoreType == "consul" {
-		// 使用Consul配置提供者
-		provider = config.NewConsulConfig(discoveryClient, serverName, cfgStore.Consul.KeyPath, cfgStore.Env)
-		err := provider.LoadAppConfig()
-		if err != nil {
-			fmt.Printf("Failed to load app config from consul: %v\n", err)
-			panic(err)
+		healthCheck := &api.AgentServiceCheck{
+			HTTP:                           fmt.Sprintf("http://%s:%d/health", app.config.Server.Host, httpPort),
+			Interval:                       "10s",
+			Timeout:                        "5s",
+			DeregisterCriticalServiceAfter: "1m",
 		}
-		// 动态监听配置文件并更新服务
-		watch := config.NewConfigWatcher(discoveryClient, cfgStore.Consul.KeyPath, serverName, cfgStore.Env, provider.OnChange())
-		go watch.Start()
-	} else {
-		// 使用本地配置提供者
-		// 从本地配置文件加载配置
-		provider = config.NewLocalConfig(serverName, cfgStore.Env)
-		err := provider.LoadAppConfig()
-		if err != nil {
-			fmt.Printf("Failed to load local app config: %v\n", err)
-			panic(err)
-		}
-	}
 
-	// 获取应用配置
-	appConfig := config.GetAppConfig()
-	if appConfig == nil {
-		panic("Application config is not loaded")
-	}
-
-	// 初始化日志系统
-	// 根据配置初始化日志系统（本地或Loki）
-	logger.Init(serverName, appConfig)
-
-	// 初始化分布式追踪系统
-	if appConfig.Tracing.Enable {
-		shutdown, err := tracing.InitTracerProvider(serverName, appConfig.Tracing.Endpoint)
-		if err != nil {
-			logger.Error(err, "Failed to initialize tracer provider", serverName)
-		} else {
-			defer shutdown(context.Background()) // 确保服务退出时刷新数据
-		}
-	}
-
-	if discoveryClient != nil {
-		err = discoveryClient.Register(serverName, appConfig.Server.Host, appConfig.Server.Port, nil)
+		err = app.discovery.Register(serverName, app.config.Server.Host, grpcPort, nil, healthCheck)
 		if err != nil {
 			logger.Error(err, "Failed to register service with consul", serverName)
 			panic(err)
 		}
-
-		// 延迟注销服务
-		// 确保服务在退出时从Consul中注销
-		defer discoveryClient.DeRegister(serverName)
 	}
 
-	// 检查appConfig是否为空
-	appConfig = config.GetAppConfig()
+	grpcServer, httpServer := startServers(app)
 
-	watch := config.NewConfigWatcher(discoveryClient, cfgStore.Consul.KeyPath, serverName, cfgStore.Env, provider.OnChange())
-	go watch.Start() // 配置热更新机制
+	shutdown := make(chan os.Signal, 1)
+	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
 
-	// 初始化认证服务组件
-	// 初始化各种认证服务相关的组件
-	var tokenService service.TokenService
-	var tokenGranter service.TokenGranter
-	var tokenEnhancer storage.TokenEnhancer
-	// var tokenStore storage.TokenStore
-	var userDetailsService service.UserDetailsService
-	var clientDetailsService service.ClientDetailsService
+	<-shutdown
+	logger.Info("Shutdown signal received, starting graceful shutdown...", serverName)
 
-	// 初始化JWT令牌增强器
-	if appConfig.OAuth2.JWTSecret == "" {
-		panic("JWT secret is not configured")
-	}
-	tokenEnhancer = storage.NewJwtTokenEnhancer(appConfig.OAuth2.JWTSecret)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-	// 初始化数据库连接
-	// 根据配置连接到数据库
-	// 添加重试机制以避免连接冲突
-	dbase, err := db.NewEasyDatabaseWithPool(appConfig.Database.Type, fmt.Sprintf("%s://%s:%s@%s:%d/%s",
-		appConfig.Database.Type,
-		appConfig.Database.UserName,
-		appConfig.Database.Password,
-		appConfig.Database.Host,
-		appConfig.Database.Port,
-		appConfig.Database.Database), appConfig.Database)
+	var shutdownErr error
+	wg := &sync.WaitGroup{}
+	wg.Add(2)
 
-	if err != nil {
-		logger.Error(err, "Failed to connect to database", serverName)
-		panic(err)
-	}
-
-	// 尝试连接Redis
-	logger.Info(
-		"Attempting to connect to Redis",
-		serverName,
-		"address", appConfig.Cache.Redis.Address,
-		"db", appConfig.Cache.Redis.DB,
-	)
-	redisClient, err := db.NewEasyRedis(
-		&appConfig.Cache.Redis.Address,
-		&appConfig.Cache.Redis.Password,
-		&appConfig.Cache.Redis.DB,
-	)
-
-	// 创建token存储，支持Redis降级到内存
-	var tokenStore storage.TokenStore
-
-	if err == nil {
-		// Redis连接成功
-		logger.Info("Successfully connected to Redis, using Redis for token store.", serverName)
-		tokenStore = storage.NewJwtTokenStore(
-			tokenEnhancer.(*storage.JwtTokenEnhancer),
-			dbase,
-			redisClient,
-		)
-	} else {
-		// Redis连接失败 - 降级到仅使用数据库的模式
-		logger.Warn(
-			"Redis connection failed, falling back to DB-only token store",
-			serverName,
-			"error", err.Error(),
-			"address", appConfig.Cache.Redis.Address,
-		)
-		tokenStore = storage.NewJwtTokenStore(tokenEnhancer.(*storage.JwtTokenEnhancer), dbase, nil)
-	}
-	tokenService = service.NewTokenService(tokenStore, tokenEnhancer)
-
-	// 初始化用户详情服务
-	userDetailsService = service.NewPostgresUserDetailsService(dbase)
-
-	// 初始化客户端详情服务
-	clientDetailsService = service.NewPostgresClientDetailsService(dbase)
-
-	// 初始化令牌授予器
-	tokenGranter = service.NewComposeTokenGranter(map[string]service.TokenGranter{
-		"client_credentials": service.NewClientCredentialsTokenGranter("client_credentials", clientDetailsService, tokenService),
-		"password":           service.NewUsernamePasswordTokenGranter("password", userDetailsService, tokenService),
-		"refresh_token":      service.NewRefreshGranter("refresh_token", tokenService),
-	})
-
-	// 启动 gRPC 服务器 (在一个新的 goroutine 中)
-	grpcPort := appConfig.Server.Port + 10000
 	go func() {
-		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", grpcPort))
-		if err != nil {
-			logger.Error(err, "Failed to listen for gRPC", serverName)
-			panic(err)
-		}
-
-		// 添加 OpenTelemetry 拦截器
-		var s *grpc.Server
-		if appConfig.Tracing.Enable {
-			s = grpc.NewServer(
-				grpc.StatsHandler(otelgrpc.NewServerHandler()),
-			)
-		} else {
-			s = grpc.NewServer()
-		}
-
-		// 创建并注册 gRPC 服务实现
-		pb.RegisterAuthServiceServer(s, service.NewGrpcServer(tokenGranter, tokenService, clientDetailsService))
-
-		logger.Info("gRPC server listening", serverName, "address", lis.Addr().String())
-		if err := s.Serve(lis); err != nil {
-			logger.Error(err, "Failed to serve gRPC", serverName)
+		defer wg.Done()
+		logger.Info("Shutting down HTTP server...", serverName)
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			shutdownErr = errors.Join(shutdownErr, fmt.Errorf("http server shutdown failed: %w", err))
 		}
 	}()
 
-	// 启动 HTTP 服务
-	// 使用Gin框架启动HTTP服务
+	go func() {
+		defer wg.Done()
+		logger.Info("Shutting down gRPC server...", serverName)
+		grpcServer.GracefulStop()
+	}()
+
+	wg.Wait()
+
+	if app.discovery != nil {
+		logger.Info("Deregistering service from Consul...", serverName)
+		app.discovery.DeRegister(serverName)
+	}
+
+	if app.tracerShutdown != nil {
+		logger.Info("Shutting down tracer provider...", serverName)
+		if err := app.tracerShutdown(shutdownCtx); err != nil {
+			shutdownErr = errors.Join(shutdownErr, fmt.Errorf("tracer shutdown failed: %w", err))
+		}
+	}
+
+	if shutdownErr != nil {
+		logger.Error(shutdownErr, "Errors during shutdown.", serverName)
+	} else {
+		logger.Info("Graceful shutdown complete.", serverName)
+	}
+}
+
+func initDependencies() (*application, error) {
+	app := &application{}
+	var err error
+
+	cfgStore, err := config.InitAppConfigStore()
+	if err != nil {
+		return nil, fmt.Errorf("failed to init config store: %w", err)
+	}
+
+	provider := config.NewLocalConfig(serverName, cfgStore.Env)
+	if err := provider.LoadAppConfig(); err != nil {
+		return nil, fmt.Errorf("failed to load local app config: %w", err)
+	}
+	app.config = config.GetAppConfig()
+	if app.config == nil {
+		return nil, errors.New("application config is not loaded")
+	}
+
+	logger.Init(serverName, app.config)
+
+	if app.config.Tracing.Enable {
+		app.tracerShutdown, err = tracing.InitTracerProvider(serverName, app.config.Tracing.Endpoint)
+		if err != nil {
+			logger.Error(err, "Failed to initialize tracer provider", serverName)
+		}
+	}
+
+	app.discovery, err = discovery.NewDiscovery(cfgStore.Consul.Host)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create consul client: %w", err)
+	}
+
+	dsn := url.URL{
+		Scheme: app.config.Database.Type,
+		User:   url.UserPassword(app.config.Database.UserName, app.config.Database.Password),
+		Host:   fmt.Sprintf("%s:%d", app.config.Database.Host, app.config.Database.Port),
+		Path:   app.config.Database.Database,
+	}
+	app.db, err = db.NewEasyDatabaseWithPool(app.config.Database.Type, dsn.String(), app.config.Database)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to database: %w", err)
+	}
+
+	app.redis, err = db.NewEasyRedis(&app.config.Cache.Redis.Address, &app.config.Cache.Redis.Password, &app.config.Cache.Redis.DB)
+	if err != nil {
+		logger.Warn("Redis connection failed, falling back to DB-only mode", "error", err)
+		app.redis = nil
+	}
+
+	if app.config.OAuth2.JWTSecret == "" {
+		return nil, errors.New("JWT secret is not configured")
+	}
+	var tokenEnhancer storage.TokenEnhancer = storage.NewJwtTokenEnhancer(app.config.OAuth2.JWTSecret)
+
+	tokenStore := storage.NewJwtTokenStore(tokenEnhancer.(*storage.JwtTokenEnhancer), app.db, app.redis)
+
+	app.tokenService = service.NewTokenService(tokenStore, tokenEnhancer)
+	app.userSvc = service.NewPostgresUserDetailsService(app.db)
+	app.clientSvc = service.NewPostgresClientDetailsService(app.db)
+	app.tokenGranter = service.NewComposeTokenGranter(map[string]service.TokenGranter{
+		"client_credentials": service.NewClientCredentialsTokenGranter("client_credentials", app.clientSvc, app.tokenService),
+		"password":           service.NewUsernamePasswordTokenGranter("password", app.userSvc, app.tokenService),
+		"refresh_token":      service.NewRefreshGranter("refresh_token", app.tokenService),
+	})
+
+	return app, nil
+}
+
+func startServers(app *application) (*grpc.Server, *http.Server) {
+	httpPort := app.config.Server.Port
+	grpcPort := app.config.Server.GrpcPort
+
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", grpcPort))
+	if err != nil {
+		logger.Error(err, "Failed to listen for gRPC", serverName)
+		panic(err)
+	}
+
+	var grpcServer *grpc.Server
+	if app.config.Tracing.Enable {
+		grpcServer = grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
+	} else {
+		grpcServer = grpc.NewServer()
+	}
+
+	pb.RegisterAuthServiceServer(grpcServer, service.NewGrpcServer(app.tokenGranter, app.tokenService, app.clientSvc))
+
+	go func() {
+		logger.Info("gRPC server listening", "address", lis.Addr().String())
+		if err := grpcServer.Serve(lis); err != nil {
+			logger.Error(err, "gRPC server failed to serve", serverName)
+		}
+	}()
+
 	g := gin.Default()
-	// 添加 OpenTelemetry 中间件
-	if appConfig.Tracing.Enable {
+	if app.config.Tracing.Enable {
 		g.Use(otelgin.Middleware(serverName))
 	}
 
-	// 启动 gRPC-Gateway 反向代理
 	go func() {
 		ctx := context.Background()
-		ctx, cancel := context.WithCancel(ctx)
-		defer cancel()
-
 		mux := runtime.NewServeMux()
-		// 添加 OpenTelemetry 拦截器
-		var opts []grpc.DialOption
-		if appConfig.Tracing.Enable {
-			opts = []grpc.DialOption{
-				grpc.WithTransportCredentials(insecure.NewCredentials()),
-				grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
-			}
-		} else {
-			opts = []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+		opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+		if app.config.Tracing.Enable {
+			opts = append(opts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
 		}
-
-		// 注册 gRPC-Gateway 处理器
 		err := pb.RegisterAuthServiceHandlerFromEndpoint(ctx, mux, fmt.Sprintf("localhost:%d", grpcPort), opts)
 		if err != nil {
 			logger.Error(err, "Failed to register gRPC-Gateway", serverName)
 			return
 		}
-
-		// 将 gRPC-Gateway 的 mux 作为 Gin 的一个路由
-		// 注意：这里使用 Any 匹配所有 /v1/ 开头的请求
 		g.Any("/v1/*any", gin.WrapH(mux))
-		logger.Info("gRPC-Gateway initialized", serverName, "path", "/v1/*")
 	}()
 
-	// 设置 Swagger UI
-	// 1. 提供 swagger.json 文件服务
-	g.StaticFile("/swagger.json", "./api/proto/auth/auth.swagger.json")
-	// 2. 提供 Swagger UI 界面，并告诉它去哪里加载 swagger.json
-	g.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler, ginSwagger.URL("/swagger.json")))
+	if app.config.Server.Host != "prod" {
+		g.StaticFile("/swagger.json", "./api/proto/auth/auth.swagger.json")
+		g.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler, ginSwagger.URL("/swagger.json")))
+	}
 
-	// 初始化健康检查组件
-	healthChecker := service.NewHealthCheckerService(dbase)
-	// 健康检查端点
-	// 提供深度健康检查接口，验证关键依赖状态
+	healthChecker := service.NewHealthCheckerService(app.db)
 	g.GET("/health", func(c *gin.Context) {
-		status := healthChecker.CheckHealth()
-		c.JSON(200, status)
+		c.JSON(http.StatusOK, healthChecker.CheckHealth())
 	})
 
-	// 配置管理端点 (仅在Consul配置存储时启用)
-	if cfgStore.StoreType == "consul" {
-		configHandler := config.NewConfigHandler(discoveryClient, provider, serverName, cfgStore.Env)
-		configHandler.RegisterConfigRoutes(g)
+	g.POST("/oauth2/token", handles.MakeTokenEndpoint(app.tokenGranter, app.clientSvc))
+	g.POST("/oauth2/client-refresh", middleware.MakeSimpleClientMiddleware(app.tokenService), handles.RefreshTokenEndpoint(app.tokenService))
+	g.POST("/login", middleware.MakeSimpleClientMiddleware(app.tokenService), handles.LoginEndPoint(app.userSvc, app.tokenService))
+	g.POST("/oauth2/refresh", middleware.MakeAuthorityAuthorizationMiddleware(app.tokenService), handles.RefreshTokenEndpoint(app.tokenService))
+	g.POST("/oauth2/verify", handles.VerifyTokenEndpoint(app.tokenService))
+	g.POST("/client/register", handles.RegisterClientEndPoint(app.clientSvc))
+	g.POST("/user/register", middleware.MakeSimpleClientMiddleware(app.tokenService), handles.RegisterUserEndPoint(app.userSvc, []string{"admin"}))
+	g.POST("/admin", middleware.MakeAuthorityAuthorizationMiddleware(app.tokenService), middleware.MakeScopeHandler("admin"), func(ctx *gin.Context) {
+		ctx.JSON(http.StatusOK, gin.H{"message": "Hello Admin!"})
+	})
+
+	httpServer := &http.Server{
+		Addr:    fmt.Sprintf(":%d", httpPort),
+		Handler: g,
 	}
 
-	// 第1步. 通过ClientId,ClientSecret 来获取客户端默认的授权令牌
-	g.POST("/oauth2/token", handles.MakeTokenEndpoint(tokenGranter, clientDetailsService))
+	go func() {
+		logger.Info("HTTP server listening", "address", httpServer.Addr)
+		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error(err, "HTTP server failed to serve", serverName)
+		}
+	}()
 
-	// 默认的客户端授权令牌刷新接口，默认用户信息存储在令牌中，未登录的用户直接使用默认令牌访问，当令牌快速过期时，可以通过此接口刷新令牌
-	g.POST("/oauth2/client-refresh", middleware.MakeSimpleClientMiddleware(tokenService), handles.RefreshTokenEndpoint(tokenService))
-
-	// 2. 面向客户端的用户登录接口，这里主要是通过默认令牌以及用户名和密码进行认证，其中令牌中客户端信息存储在客户端默认的令牌中从中间件中获取，用户名和密码通过json传值，生成用户访问令牌，
-	g.POST("/login", middleware.MakeSimpleClientMiddleware(tokenService), handles.LoginEndPoint(userDetailsService, tokenService))
-
-	// 3. 通过用户授权令牌来获取刷新令牌，这里主要是通过用户授权令牌进行认证，生成新的访问令牌和刷新令牌，用户信息和客户端等信息存储在令牌中，从中间件中获取
-	g.POST("/oauth2/refresh", middleware.MakeAuthorityAuthorizationMiddleware(tokenService), handles.RefreshTokenEndpoint(tokenService))
-
-	g.POST("/oauth2/verify", handles.VerifyTokenEndpoint(tokenService))
-
-	g.POST("/client/register", handles.RegisterClientEndPoint(clientDetailsService))
-
-	g.POST("/user/register", middleware.MakeSimpleClientMiddleware(tokenService), handles.RegisterUserEndPoint(userDetailsService, []string{"admin"}))
-
-	// admin 接口，需要管理员权限才能访问（测试案例）
-	g.POST("/admin",
-		middleware.MakeAuthorityAuthorizationMiddleware(tokenService),
-		middleware.MakeScopeHandler("admin"),
-		func(ctx *gin.Context) {
-			ctx.JSON(http.StatusOK, gin.H{
-				"message": "Hello Admin!",
-			})
-		},
-	)
-
-	// 启动 HTTP 服务
-	// 监听指定端口提供服务
-	logger.Info("Starting server", serverName, "port", appConfig.Server.Port)
-	if err := g.Run(fmt.Sprintf(":%d", appConfig.Server.Port)); err != nil {
-		logger.Error(err, "Failed to start HTTP server", serverName)
-	}
+	return grpcServer, httpServer
 }

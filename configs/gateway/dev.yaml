@@ -3,7 +3,7 @@ server:
   port: 10000
 tracing:
   enable: true
-  endpoint: "http://172.29.16.1:14268/api/traces"
+  endpoint: "http://172.29.16.1:14268/api"
 gateway:
   route_rules:
     - service_name: "user-svc"

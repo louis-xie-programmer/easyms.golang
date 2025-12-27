@@ -1,7 +1,17 @@
-# 服务特有配置
+# This is the environment-specific configuration for the auth-svc
+
 server:
   host: "172.29.16.1"
   port: 10001
+  grpc_port: 50051
+
 tracing:
   enable: true
-  endpoint: "http://172.29.16.1:14268/api/traces"
+  # Correct: Provide only the host and port. The path will be specified in the code.
+  endpoint: "172.29.16.1:4318"
+
+oauth2:
+  jwt_secret: "your-super-secret-key-that-is-at-least-32-bytes-long"
+  issuer: "easyms-auth-svc"
+
+# Database and other shared configs are inherited from configs/share/dev.yaml

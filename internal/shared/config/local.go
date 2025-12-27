@@ -35,25 +35,25 @@ func (lc *LocalConfig) OnChange() func(*models.AppConfig) {
 }
 
 func (lc *LocalConfig) LoadAppConfig() error {
-	// 1. Load shared configuration file (e.g., configs/share/dev.yaml)
+	// 1. Load shared configuration file (e.g., configs/share/dev.yaml) as the base.
 	sharedPath := GetLocalAppConfigFileName(lc.Env)
 	sharedData, err := os.ReadFile(sharedPath)
 	if err != nil {
 		return fmt.Errorf("failed to read shared config file %s: %w", sharedPath, err)
 	}
 
-	var sharedCfg models.AppConfig
-	if err := yaml.Unmarshal(sharedData, &sharedCfg); err != nil {
+	var finalCfg models.AppConfig
+	if err := yaml.Unmarshal(sharedData, &finalCfg); err != nil {
 		return fmt.Errorf("failed to unmarshal shared config: %w", err)
 	}
 
-	// 2. Load service-specific configuration file (e.g., configs/gateway/dev.yaml)
+	// 2. Load service-specific configuration file (e.g., configs/auth-svc/dev.yaml).
 	servicePath := GetLocalServerConfigFileName(lc.ServerName, lc.Env)
 	serviceData, err := os.ReadFile(servicePath)
 	if err != nil {
 		// If the service-specific file doesn't exist, just use the shared config.
 		if os.IsNotExist(err) {
-			SetAppConfig(&sharedCfg)
+			SetAppConfig(&finalCfg)
 			return nil
 		}
 		return fmt.Errorf("failed to read service config file %s: %w", servicePath, err)
@@ -64,14 +64,14 @@ func (lc *LocalConfig) LoadAppConfig() error {
 		return fmt.Errorf("failed to unmarshal service config: %w", err)
 	}
 
-	// 3. Merge shared config into service config.
-	// Service-specific values will overwrite shared values if they exist.
-	if err := mergo.Merge(&serviceCfg, sharedCfg); err != nil {
+	// 3. Merge service-specific config ON TOP of the shared config, overwriting values.
+	// This is the correct merge strategy.
+	if err := mergo.Merge(&finalCfg, serviceCfg, mergo.WithOverride); err != nil {
 		return fmt.Errorf("failed to merge configs: %w", err)
 	}
 
 	// 4. Set the final, merged config as the global application config.
-	SetAppConfig(&serviceCfg)
+	SetAppConfig(&finalCfg)
 
 	return nil
 }
