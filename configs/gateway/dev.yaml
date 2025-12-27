@@ -4,3 +4,60 @@ server:
 tracing:
   enable: true
   endpoint: "http://172.29.16.1:14268/api/traces"
+gateway:
+  route_rules:
+    - service_name: "user-svc"
+      path_prefix: "/api/users"
+      strip_prefix: true
+      path_rewrite: "^/([^/]+)(/.*)?$"
+      rewrite_target: "$2"
+      add_headers:
+        X-Forwarded-By: "api-gateway"
+        X-Original-Path: "{{.RequestPath}}"
+      remove_headers:
+        - "X-Internal-Header"
+    - service_name: "auth-svc"
+      path_prefix: "/api/auth"
+      strip_prefix: true
+      add_headers:
+        X-Forwarded-By: "api-gateway"
+    - service_name: "order-svc"
+      path_prefix: "/api/orders"
+
+  rate_limit:
+    default_rate: 100
+    default_burst: 200
+    ip_limits:
+      - cidr: "192.168.1.0/24"
+        rate: 50
+        burst: 100
+    ua_limits:
+      - pattern: "bot"
+        rate: 10
+        burst: 20
+
+  circuit_breaker:
+    services:
+      user-svc:
+        counter_reset_interval: 30
+        half_open_max_successes: 2
+        failure_rate_window: 10
+        failure_rate_threshold: 0.5
+      auth-svc:
+        counter_reset_interval: 60
+        half_open_max_successes: 3
+        failure_rate_window: 15
+        failure_rate_threshold: 0.3
+
+  # Reverse Proxy Transport Configuration
+  proxy:
+    connect_timeout: "5s"
+    response_header_timeout: "30s"
+    max_idle_conns: 200
+    max_idle_conns_per_host: 50
+    idle_conn_timeout: "90s"
+
+  # Gateway's own credentials for authentication
+  auth:
+    client_id: "gateway-client"
+    client_secret: "gateway-secret"

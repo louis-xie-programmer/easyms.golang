@@ -2,59 +2,133 @@ package models
 
 import (
 	"fmt"
+	"net"
+	"regexp"
 	"sync"
 	"time"
 )
 
-// AppConfigStore 用于解析 app.yaml 中的 StoreType 和 Consul 配置
-type AppConfigStore struct {
-	Env       string       `yaml:"env"`
-	StoreType string       `yaml:"store_type"`
-	Consul    ConsulConfig `yaml:"consul"`
+// --- Gateway Specific Models ---
+
+// ProxyConfig holds configuration for the reverse proxy transport.
+type ProxyConfig struct {
+	ConnectTimeout        time.Duration `yaml:"connect_timeout"`
+	ResponseHeaderTimeout time.Duration `yaml:"response_header_timeout"`
+	MaxIdleConns          int           `yaml:"max_idle_conns"`
+	MaxIdleConnsPerHost   int           `yaml:"max_idle_conns_per_host"`
+	IdleConnTimeout       time.Duration `yaml:"idle_conn_timeout"`
 }
 
-// ConsulConfig Consul配置信息
-type ConsulConfig struct {
-	Host            string `yaml:"host"`
-	KeyPath         string `yaml:"key_path"`
-	ReloadOnChanges bool   `yaml:"reload_on_changes"`
+// GatewayConfig holds all gateway-specific configurations.
+type GatewayConfig struct {
+	RouteRules     []*RouteRule          `yaml:"route_rules"`
+	RateLimit      *RateLimitConfig      `yaml:"rate_limit"`
+	CircuitBreaker *CircuitBreakerConfig `yaml:"circuit_breaker"`
+	Auth           *AuthConfig           `yaml:"auth"`
+	Proxy          *ProxyConfig          `yaml:"proxy,omitempty"` // Added Proxy config
 }
 
-// OAuth2Config 定义OAuth2相关配置
+// RouteRule defines a routing rule.
+type RouteRule struct {
+	ServiceName   string            `yaml:"service_name"`
+	PathPrefix    string            `yaml:"path_prefix"`
+	StripPrefix   bool              `yaml:"strip_prefix"`
+	PathRewrite   string            `yaml:"path_rewrite,omitempty"`
+	RewriteTarget string            `yaml:"rewrite_target,omitempty"`
+	AddHeaders    map[string]string `yaml:"add_headers,omitempty"`
+	RemoveHeaders []string          `yaml:"remove_headers,omitempty"`
+}
+
+// RateLimitConfig holds rate-limiting rules.
+type RateLimitConfig struct {
+	IPLimits     []IPLimitRule `yaml:"ip_limits"`
+	UALimits     []UALimitRule `yaml:"ua_limits"`
+	DefaultRate  float64       `yaml:"default_rate"`
+	DefaultBurst int           `yaml:"default_burst"`
+}
+
+type IPLimitRule struct {
+	CIDR  string     `yaml:"cidr"`
+	Rate  float64    `yaml:"rate"`
+	Burst int        `yaml:"burst"`
+	Net   *net.IPNet `yaml:"-"` // Ignored by YAML parser
+}
+
+type UALimitRule struct {
+	Pattern string         `yaml:"pattern"`
+	Rate    float64        `yaml:"rate"`
+	Burst   int            `yaml:"burst"`
+	Regexp  *regexp.Regexp `yaml:"-"` // Ignored by YAML parser
+}
+
+// CircuitBreakerConfig holds circuit breaker rules.
+type CircuitBreakerConfig struct {
+	Services map[string]*CircuitBreakerServiceConfig `yaml:"services"`
+}
+
+// CircuitBreakerServiceConfig defines rules for a specific service.
+type CircuitBreakerServiceConfig struct {
+	CounterResetInterval int64   `yaml:"counter_reset_interval"`
+	HalfOpenMaxSuccesses int64   `yaml:"half_open_max_successes"`
+	FailureRateWindow    int64   `yaml:"failure_rate_window"`
+	FailureRateThreshold float64 `yaml:"failure_rate_threshold"`
+}
+
+// AuthConfig holds gateway's own credentials.
+type AuthConfig struct {
+	ClientID     string `yaml:"client_id"`
+	ClientSecret string `yaml:"client_secret"`
+}
+
+// --- Shared Application Models ---
+
+// OAuth2Config defines OAuth2 related settings.
 type OAuth2Config struct {
 	JWTSecret string `yaml:"jwt_secret"`
 	Issuer    string `yaml:"issuer"`
 }
 
-// AppConfig 定义应用核心配置
+// AppConfig is the root configuration object for any service.
 type AppConfig struct {
 	Log      LogConfig      `yaml:"log,omitempty"`
 	Loki     LokiConfig     `yaml:"loki,omitempty"`
 	Server   ServerConfig   `yaml:"server,omitempty"`
 	Database DatabaseConfig `yaml:"database,omitempty"`
 	RabbitMQ RabbitMQConfig `yaml:"rabbitmq,omitempty"`
-	Tracing  TracingConfig  `yaml:"tracing,omitempty"` // 新增分布式追踪配置
-
-	// 添加配置锁，防止并发读写
-	ConfigLock sync.RWMutex `yaml:"-"`
-
-	OAuth2 OAuth2Config `yaml:"oauth2"`
-
-	Cache struct {
+	Tracing  TracingConfig  `yaml:"tracing,omitempty"`
+	OAuth2   OAuth2Config   `yaml:"oauth2,omitempty"`
+	Cache    struct {
 		Redis RedisConfig `yaml:"redis,omitempty"`
 	} `yaml:"cache,omitempty"`
+	Consul ConsulConfig `yaml:"consul,omitempty"`
 
-	Redis RedisConfig `yaml:"redis,omitempty"`
+	// Service-specific configurations
+	Gateway *GatewayConfig `yaml:"gateway,omitempty"`
+
+	ConfigLock sync.RWMutex `yaml:"-"`
 }
 
-// ServerConfig 定义服务器配置
+// AppConfigStore is used to parse the initial app.yaml.
+type AppConfigStore struct {
+	Env       string       `yaml:"env"`
+	StoreType string       `yaml:"store_type"`
+	Consul    ConsulConfig `yaml:"consul"`
+}
+
+// ConsulConfig holds Consul connection details.
+type ConsulConfig struct {
+	Host            string `yaml:"host"`
+	KeyPath         string `yaml:"key_path"`
+	ReloadOnChanges bool   `yaml:"reload_on_changes"`
+}
+
+// ServerConfig defines server settings.
 type ServerConfig struct {
 	Host string    `yaml:"host"`
 	Port int       `yaml:"port"`
 	Tls  TLSConfig `yaml:"tls"`
 }
 
-// Validate 验证 ServerConfig 配置的有效性
 func (s *ServerConfig) Validate() error {
 	if s.Port <= 0 || s.Port > 65535 {
 		return fmt.Errorf("invalid server port: %d, port must be between 1 and 65535", s.Port)
@@ -62,63 +136,54 @@ func (s *ServerConfig) Validate() error {
 	return nil
 }
 
-// TLSConfig 配置TLS
 type TLSConfig struct {
 	Enable bool   `yaml:"enable"`
 	Cert   string `yaml:"cert"`
 	Key    string `yaml:"key"`
 }
 
-// LogConfig 定义日志配置
 type LogConfig struct {
 	LogLevel string `yaml:"log_level"`
-	LogType  string `yaml:"log_type"` // 日志后端类型(zerolog/loki)
+	LogType  string `yaml:"log_type"`
 }
 
-// LokiConfig 定义Loki日志系统配置
 type LokiConfig struct {
 	URL      string `yaml:"url"`
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
 }
 
-// RedisConfig 定义Redis配置
 type RedisConfig struct {
-	Address  string `yaml:"address"`
-	Password string `yaml:"password"`
-	DB       int    `yaml:"db"`
-	// 缓存防护配置
-	NullCacheExpire int `yaml:"null_cache_expire"` // 空值缓存过期时间(秒)
-	MutexExpire     int `yaml:"mutex_expire"`      // 互斥锁过期时间(秒)
+	Address         string `yaml:"address"`
+	Password        string `yaml:"password"`
+	DB              int    `yaml:"db"`
+	NullCacheExpire int    `yaml:"null_cache_expire"`
+	MutexExpire     int    `yaml:"mutex_expire"`
 }
 
-// DatabaseConfig 定义数据库配置
 type DatabaseConfig struct {
-	Type     string `yaml:"type"`
-	Host     string `yaml:"host"`
-	Port     int    `yaml:"port"`
-	UserName string `yaml:"user"`
-	Password string `yaml:"password"`
-	Database string `yaml:"database"`
-	// 连接池配置
-	MaxIdleConns    int `yaml:"max_idle_conns"`     // 最大空闲连接数
-	MaxOpenConns    int `yaml:"max_open_conns"`     // 最大打开连接数
-	ConnMaxLifetime int `yaml:"conn_max_lifetime"`  // 连接最大生命周期(秒)
-	ConnMaxIdleTime int `yaml:"conn_max_idle_time"` // 连接最大空闲时间(秒)
+	Type            string `yaml:"type"`
+	Host            string `yaml:"host"`
+	Port            int    `yaml:"port"`
+	UserName        string `yaml:"user"`
+	Password        string `yaml:"password"`
+	Database        string `yaml:"database"`
+	MaxIdleConns    int    `yaml:"max_idle_conns"`
+	MaxOpenConns    int    `yaml:"max_open_conns"`
+	ConnMaxLifetime int    `yaml:"conn_max_lifetime"`
+	ConnMaxIdleTime int    `yaml:"conn_max_idle_time"`
 }
 
-// RabbitMQConfig 定义 RabbitMQ 配置
 type RabbitMQConfig struct {
 	URL string `yaml:"url"`
 }
 
-// TracingConfig 定义分布式追踪配置
 type TracingConfig struct {
 	Enable   bool   `yaml:"enable"`
-	Endpoint string `yaml:"endpoint"` // 例如: http://jaeger:14268/api/traces
+	Endpoint string `yaml:"endpoint"`
 }
 
-// ConfigVersion 配置版本信息
+// ConfigVersion holds versioning info, useful for remote config management.
 type ConfigVersion struct {
 	VersionID   string    `json:"version_id"`
 	Timestamp   time.Time `json:"timestamp"`

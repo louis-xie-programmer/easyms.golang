@@ -50,39 +50,28 @@ func (p *RoutingPlugin) Execute(ctx *plugin.Context) {
 	ctx.Set(OriginalPathKey, originalPath)
 
 	// 1. Match Route
-	var serviceName, targetPath string
 	matchedRoute := p.matchRoute(originalPath)
+	if matchedRoute == nil {
+		http.Error(ctx.ResponseWriter, "no matching route found", http.StatusNotFound)
+		return
+	}
 
-	if matchedRoute != nil {
-		serviceName = matchedRoute.ServiceName
-		targetPath = originalPath
-		if matchedRoute.StripPrefix {
-			targetPath = strings.TrimPrefix(targetPath, matchedRoute.PathPrefix)
-			if !strings.HasPrefix(targetPath, "/") {
-				targetPath = "/" + targetPath
-			}
-		}
-	} else {
-		// Default routing logic if no rule matches
-		parts := strings.Split(strings.Trim(originalPath, "/"), "/")
-		if len(parts) == 0 {
-			http.Error(ctx.ResponseWriter, "invalid path", http.StatusBadRequest)
-			return
-		}
-		serviceName = parts[0]
-		if len(parts) > 1 {
-			targetPath = "/" + strings.Join(parts[1:], "/")
-		} else {
-			targetPath = "/"
+	serviceName := matchedRoute.ServiceName
+	targetPath := originalPath
+	if matchedRoute.StripPrefix {
+		targetPath = strings.TrimPrefix(targetPath, matchedRoute.PathPrefix)
+		if !strings.HasPrefix(targetPath, "/") {
+			targetPath = "/" + targetPath
 		}
 	}
 
+	// Store the service name in the context for other plugins (like CircuitBreaker).
+	ctx.Set(ServiceNameKey, serviceName)
+
 	// 2. Service Discovery
-	// Here you can implement different load balancing strategies.
-	// For now, we use a simple round-robin provided by the discovery service.
 	upstreamHost := p.serviceDiscovery.GetService(serviceName)
 	if upstreamHost == "" {
-		http.Error(ctx.ResponseWriter, fmt.Sprintf("service '%s' not found", serviceName), http.StatusServiceUnavailable)
+		http.Error(ctx.ResponseWriter, fmt.Sprintf("service '%s' not found or unavailable", serviceName), http.StatusServiceUnavailable)
 		return
 	}
 
@@ -95,9 +84,10 @@ func (p *RoutingPlugin) Execute(ctx *plugin.Context) {
 }
 
 func (p *RoutingPlugin) matchRoute(path string) *Route {
-	for _, route := range p.routes {
-		if strings.HasPrefix(path, route.PathPrefix) {
-			return &route
+	// For a large number of routes, consider a more efficient structure like a radix tree.
+	for i := range p.routes {
+		if strings.HasPrefix(path, p.routes[i].PathPrefix) {
+			return &p.routes[i]
 		}
 	}
 	return nil

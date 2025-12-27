@@ -2,45 +2,61 @@ package plugins
 
 import (
 	"easyms/internal/platform/gateway/plugin"
+	"easyms/internal/shared/models"
+	"github.com/hashicorp/golang-lru/v2" // Use the thread-safe v2 root package
 	"golang.org/x/time/rate"
+	"log"
+	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 )
 
-// RateLimitConfig 定义了限流插件的配置结构。
-type RateLimitConfig struct {
-	DefaultRate  float64
-	DefaultBurst int
-	IPLimits     map[string]struct {
-		Rate  float64
-		Burst int
-	}
-	UALimits map[string]struct {
-		Rate  float64
-		Burst int
-	}
-}
+const defaultLimiterCacheSize = 1024
 
-// RateLimitPlugin 实现了基于 IP、User-Agent 和默认值的限流功能。
+// RateLimitPlugin implements rate limiting based on IP, User-Agent, and a default.
 type RateLimitPlugin struct {
-	config       *RateLimitConfig
-	rateLimiters map[string]*rate.Limiter
-	mu           sync.RWMutex
+	config       *models.RateLimitConfig
+	limiterCache *lru.Cache[string, *rate.Limiter] // Thread-safe generic LRU
+	mu           sync.Mutex
 }
 
-// NewRateLimitPlugin 创建一个新的限流插件。
-func NewRateLimitPlugin(config *RateLimitConfig) *RateLimitPlugin {
+// NewRateLimitPlugin creates a new rate-limiting plugin from the given configuration.
+func NewRateLimitPlugin(config *models.RateLimitConfig) *RateLimitPlugin {
 	if config == nil {
-		// 提供一个默认配置，以防万一
-		config = &RateLimitConfig{
+		config = &models.RateLimitConfig{
 			DefaultRate:  100,
 			DefaultBurst: 200,
 		}
 	}
+
+	for i := range config.IPLimits {
+		_, ipNet, err := net.ParseCIDR(config.IPLimits[i].CIDR)
+		if err != nil {
+			log.Printf("Invalid CIDR in rate limit config, skipping: %s", config.IPLimits[i].CIDR)
+			continue
+		}
+		config.IPLimits[i].Net = ipNet
+	}
+	for i := range config.UALimits {
+		re, err := regexp.Compile(config.UALimits[i].Pattern)
+		if err != nil {
+			log.Printf("Invalid regex in rate limit config, skipping: %s", config.UALimits[i].Pattern)
+			continue
+		}
+		config.UALimits[i].Regexp = re
+	}
+
+	// Create a thread-safe LRU cache with generics
+	cache, err := lru.New[string, *rate.Limiter](defaultLimiterCacheSize)
+	if err != nil {
+		log.Fatalf("Failed to create LRU cache for rate limiters: %v", err)
+	}
+
 	return &RateLimitPlugin{
 		config:       config,
-		rateLimiters: make(map[string]*rate.Limiter),
+		limiterCache: cache,
 	}
 }
 
@@ -55,44 +71,33 @@ func (p *RateLimitPlugin) Order() int {
 func (p *RateLimitPlugin) Execute(ctx *plugin.Context) {
 	if !p.isAllowed(ctx.Request) {
 		http.Error(ctx.ResponseWriter, "rate limit exceeded", http.StatusTooManyRequests)
-		return // 超出限流，中断插件链
+		return
 	}
-	ctx.Next() // 未超出，继续下一个插件
+	ctx.Next()
 }
 
-// isAllowed 检查请求是否允许通过。
 func (p *RateLimitPlugin) isAllowed(req *http.Request) bool {
-	ip := req.RemoteAddr
+	ipStr := p.getClientIP(req)
+	ip := net.ParseIP(ipStr)
 	ua := req.UserAgent()
 
-	// IP限流
-	if p.config.IPLimits != nil {
-		for cidr, limit := range p.config.IPLimits {
-			if strings.HasPrefix(ip, cidr) {
-				limiter := p.getLimiter("ip:"+cidr, limit.Rate, limit.Burst)
-				if !limiter.Allow() {
-					return false
-				}
-				break // 一个IP只匹配一个规则
+	for _, rule := range p.config.UALimits {
+		if rule.Regexp != nil && rule.Regexp.MatchString(ua) {
+			limiter := p.getLimiter("ua:"+rule.Pattern, rule.Rate, rule.Burst)
+			return limiter.Allow()
+		}
+	}
+
+	if ip != nil {
+		for _, rule := range p.config.IPLimits {
+			if rule.Net != nil && rule.Net.Contains(ip) {
+				limiter := p.getLimiter("ip:"+rule.CIDR, rule.Rate, rule.Burst)
+				return limiter.Allow()
 			}
 		}
 	}
 
-	// User-Agent限流
-	if p.config.UALimits != nil {
-		for pattern, limit := range p.config.UALimits {
-			if strings.Contains(ua, pattern) {
-				limiter := p.getLimiter("ua:"+pattern, limit.Rate, limit.Burst)
-				if !limiter.Allow() {
-					return false
-				}
-				break // 一个UA只匹配一个规则
-			}
-		}
-	}
-
-	// 默认限流
-	if p.config.DefaultRate > 0 && p.config.DefaultBurst > 0 {
+	if p.config.DefaultRate > 0 {
 		defaultLimiter := p.getLimiter("default", p.config.DefaultRate, p.config.DefaultBurst)
 		return defaultLimiter.Allow()
 	}
@@ -100,24 +105,41 @@ func (p *RateLimitPlugin) isAllowed(req *http.Request) bool {
 	return true
 }
 
-// getLimiter 获取或创建一个新的限流器。
-func (p *RateLimitPlugin) getLimiter(key string, r float64, b int) *rate.Limiter {
-	p.mu.RLock()
-	limiter, exists := p.rateLimiters[key]
-	p.mu.RUnlock()
+func (p *RateLimitPlugin) getClientIP(req *http.Request) string {
+	if fwd := req.Header.Get("X-Forwarded-For"); fwd != "" {
+		parts := strings.Split(fwd, ",")
+		ipStr := strings.TrimSpace(parts[0])
+		if host, _, err := net.SplitHostPort(ipStr); err == nil {
+			return host
+		}
+		return ipStr
+	}
 
-	if exists {
+	if realIP := req.Header.Get("X-Real-IP"); realIP != "" {
+		return realIP
+	}
+
+	if host, _, err := net.SplitHostPort(req.RemoteAddr); err == nil {
+		return host
+	}
+	return req.RemoteAddr
+}
+
+func (p *RateLimitPlugin) getLimiter(key string, r float64, b int) *rate.Limiter {
+	// lru.Cache is thread-safe, so Get is safe.
+	if limiter, ok := p.limiterCache.Get(key); ok {
 		return limiter
 	}
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
 	// Double-check locking
-	if limiter, exists = p.rateLimiters[key]; exists {
+	if limiter, ok := p.limiterCache.Get(key); ok {
 		return limiter
 	}
 
-	limiter = rate.NewLimiter(rate.Limit(r), b)
-	p.rateLimiters[key] = limiter
-	return limiter
+	newLimiter := rate.NewLimiter(rate.Limit(r), b)
+	p.limiterCache.Add(key, newLimiter)
+	return newLimiter
 }
