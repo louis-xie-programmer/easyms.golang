@@ -2,30 +2,43 @@ package service
 
 import (
 	"context"
-	"easyms/internal/shared/db"
+	"easyms/internal/services/user/internal/storage" // Import the new storage package
 	"easyms/internal/shared/models"
+	"errors"
 	"fmt"
+	"strings"
+
+	"gorm.io/gorm"
 )
 
-// UserService 定义了用户服务的接口
+// --- Business Errors ---
+
+var (
+	ErrUserNotFound   = errors.New("user not found")
+	ErrUsernameExists = errors.New("username already exists")
+	ErrEmailExists    = errors.New("email already exists")
+)
+
+// --- Service Definition ---
+
 type UserService interface {
 	Create(ctx context.Context, username, password, email string) (*models.User, error)
 	GetByID(ctx context.Context, id uint) (*models.User, error)
 }
 
-// userServiceImpl 实现了 UserService 接口
+// userServiceImpl now depends on UserStorage instead of db.Database
 type userServiceImpl struct {
-	db db.Database
+	storage storage.UserStorage
 }
 
-// NewUserService 创建一个新的用户服务实例
-func NewUserService(db db.Database) UserService {
+// NewUserService now requires a UserStorage dependency.
+func NewUserService(storage storage.UserStorage) UserService {
 	return &userServiceImpl{
-		db: db,
+		storage: storage,
 	}
 }
 
-// Create 创建一个新用户
+// Create creates a new user.
 func (s *userServiceImpl) Create(ctx context.Context, username, password, email string) (*models.User, error) {
 	user := &models.User{
 		Username: username,
@@ -35,19 +48,31 @@ func (s *userServiceImpl) Create(ctx context.Context, username, password, email 
 		return nil, fmt.Errorf("failed to hash password: %w", err)
 	}
 
-	if err := s.db.Insert(ctx, user); err != nil {
-		return nil, fmt.Errorf("failed to create user in db: %w", err)
+	// Delegate persistence to the storage layer
+	if err := s.storage.Create(ctx, user); err != nil {
+		if strings.Contains(err.Error(), "Duplicate entry") || strings.Contains(err.Error(), "unique constraint") {
+			if strings.Contains(err.Error(), "username") {
+				return nil, ErrUsernameExists
+			}
+			if strings.Contains(err.Error(), "email") {
+				return nil, ErrEmailExists
+			}
+		}
+		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
 
 	return user, nil
 }
 
-// GetByID 根据 ID 获取一个用户
+// GetByID retrieves a user by their ID.
 func (s *userServiceImpl) GetByID(ctx context.Context, id uint) (*models.User, error) {
-	var user models.User
-	err := s.db.GetDB().WithContext(ctx).First(&user, id).Error
+	// Delegate lookup to the storage layer
+	user, err := s.storage.GetByID(ctx, id)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrUserNotFound
+		}
 		return nil, err
 	}
-	return &user, nil
+	return user, nil
 }

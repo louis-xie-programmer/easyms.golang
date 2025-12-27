@@ -6,28 +6,57 @@ import (
 	"easyms/internal/shared/logger"
 	"easyms/internal/shared/models"
 	"easyms/internal/shared/mq"
-	"time"
-
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"time"
 )
 
 const componentName = "outbox_relay"
 
-// RelayService is responsible for polling the outbox table and forwarding events to a message queue.
+var (
+	eventsProcessed = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "outbox_relay_events_processed_total",
+		Help: "The total number of events processed from the outbox.",
+	})
+	publishSuccess = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "outbox_relay_publish_success_total",
+		Help: "The total number of events successfully published.",
+	})
+	publishFailed = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "outbox_relay_publish_failed_total",
+		Help: "The total number of events that failed to publish.",
+	})
+	batchProcessDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "outbox_relay_batch_duration_seconds",
+		Help:    "The duration of processing a batch of outbox events.",
+		Buckets: prometheus.DefBuckets,
+	})
+)
+
+// RelayService is responsible for polling the outbox table and forwarding events.
 type RelayService struct {
 	db        db.Database
 	publisher mq.Publisher
+	config    *models.OutboxConfig
 	stopChan  chan struct{}
 	ticker    *time.Ticker
 }
 
 // NewRelayService creates a new instance of the RelayService.
-func NewRelayService(db db.Database, pub mq.Publisher, interval time.Duration) *RelayService {
+func NewRelayService(db db.Database, pub mq.Publisher, cfg *models.OutboxConfig) *RelayService {
+	if cfg == nil { // Provide default config
+		cfg = &models.OutboxConfig{
+			RelayInterval: 10 * time.Second,
+			BatchSize:     100,
+		}
+	}
 	return &RelayService{
 		db:        db,
 		publisher: pub,
+		config:    cfg,
 		stopChan:  make(chan struct{}),
-		ticker:    time.NewTicker(interval),
+		ticker:    time.NewTicker(cfg.RelayInterval),
 	}
 }
 
@@ -53,13 +82,13 @@ func (s *RelayService) Stop() {
 	close(s.stopChan)
 }
 
-// processOutbox fetches a batch of events from the database, publishes them, and then deletes them.
 func (s *RelayService) processOutbox(ctx context.Context) {
+	timer := prometheus.NewTimer(batchProcessDuration)
+	defer timer.ObserveDuration()
+
 	var events []models.OutboxEvent
-	// Complete the "fetch" and "delete" in a single transaction to prevent duplicate processing by multiple instances.
 	err := s.db.RunInTransaction(ctx, func(tx db.TxTransaction) error {
-		// Use FOR UPDATE to lock rows, preventing concurrency issues.
-		if err := tx.GetDB().WithContext(ctx).Set("gorm:query_option", "FOR UPDATE SKIP LOCKED").Limit(100).Order("created_at asc").Find(&events).Error; err != nil {
+		if err := tx.GetDB().WithContext(ctx).Set("gorm:query_option", "FOR UPDATE SKIP LOCKED").Limit(s.config.BatchSize).Order("created_at asc").Find(&events).Error; err != nil {
 			return err
 		}
 
@@ -73,16 +102,14 @@ func (s *RelayService) processOutbox(ctx context.Context) {
 				RoutingKey: event.RoutingKey,
 				Payload:    event.Payload,
 			}
-			// Publish to RabbitMQ.
-			// If publishing fails, the entire transaction is rolled back,
-			// meaning the event won't be deleted and will be retried on the next poll.
 			if err := s.publisher.Publish(ctx, mqEvent); err != nil {
-				logger.Error(err, "Failed to publish outbox event, rolling back", "component", componentName, "event_id", event.ID)
+				logger.Error(err, "Failed to publish outbox event, rolling back", "component", componentName, "event_id", event.ID, "exchange", event.Exchange)
+				publishFailed.Inc()
 				return err
 			}
+			publishSuccess.Inc()
 		}
 
-		// After all events are successfully published, delete them.
 		eventIDs := make([]uuid.UUID, len(events))
 		for i, event := range events {
 			eventIDs[i] = event.ID
@@ -99,6 +126,7 @@ func (s *RelayService) processOutbox(ctx context.Context) {
 	}
 
 	if len(events) > 0 {
+		eventsProcessed.Add(float64(len(events)))
 		logger.Info("Processed and published events from outbox", "component", componentName, "count", len(events))
 	}
 }

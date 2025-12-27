@@ -1,6 +1,11 @@
 server:
   host: "172.29.16.1"
   port: 10003
+
 tracing:
   enable: true
-  endpoint: "http://172.29.16.1:14268/api/traces"
+  endpoint: "172.29.16.1:4318" # Corrected to standard OTLP endpoint
+
+outbox:
+  relay_interval: "10s"
+  batch_size: 100

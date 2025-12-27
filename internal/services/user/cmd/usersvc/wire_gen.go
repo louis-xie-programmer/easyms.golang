@@ -7,22 +7,27 @@
 package main
 
 import (
+	"context"
 	"easyms/internal/services/user/internal/handles"
 	"easyms/internal/services/user/internal/service"
+	"easyms/internal/services/user/internal/storage"
 	"easyms/internal/shared/config"
 	"easyms/internal/shared/db"
 	"easyms/internal/shared/discovery"
+	"easyms/internal/shared/logger"
 	"easyms/internal/shared/models"
+	"easyms/internal/shared/tracing"
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/google/wire"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 	"net/http"
+	"net/url"
 )
 
 // Injectors from wire.go:
 
-// InitializeApp 是 Wire 的入口点（Injector）。
-// 它的参数现在是 ConfigInputs 结构体。
+// InitializeApp is the entry point for Wire.
 func InitializeApp(inputs ConfigInputs) (*App, func(), error) {
 	appConfigStore, err := config.InitAppConfigStore()
 	if err != nil {
@@ -42,15 +47,12 @@ func InitializeApp(inputs ConfigInputs) (*App, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	userService := service.NewUserService(database)
+	userStorage := storage.NewUserStorage(database)
+	userService := service.NewUserService(userStorage)
 	userHandler := handles.NewUserHandler(userService)
 	healthHandler := NewHealthHandler(database)
-	engine := provideGinEngine(userHandler, healthHandler)
-	app, err := NewApp(engine, discovery, appConfig, inputs)
-	if err != nil {
-		cleanup()
-		return nil, nil, err
-	}
+	server := provideHttpServer(userHandler, healthHandler, appConfig, inputs)
+	app := NewApp(server, discovery)
 	return app, func() {
 		cleanup()
 	}, nil
@@ -58,33 +60,27 @@ func InitializeApp(inputs ConfigInputs) (*App, func(), error) {
 
 // wire.go:
 
-// App 是 user-svc 所有组件的容器。
+// App is the container for all components of the user-svc.
 type App struct {
-	engine *gin.Engine
-	ds     *discovery.Discovery
+	httpServer *http.Server
+	ds         *discovery.Discovery
 }
 
-// NewApp 创建一个新的 App 实例。
-func NewApp(engine *gin.Engine, ds *discovery.Discovery, cfg *models.AppConfig, inputs ConfigInputs) (*App, error) {
-
-	err := ds.Register(inputs.ServerName, cfg.Server.Host, cfg.Server.Port, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to register service: %w", err)
-	}
-
+// NewApp creates a new App instance.
+func NewApp(httpServer *http.Server, ds *discovery.Discovery) *App {
 	return &App{
-		engine: engine,
-		ds:     ds,
-	}, nil
+		httpServer: httpServer,
+		ds:         ds,
+	}
 }
 
-// ConfigInputs 用于封装传递给 wire 的简单类型参数。
+// ConfigInputs encapsulates simple type parameters for Wire.
 type ConfigInputs struct {
 	ServerName string
 	Env        string
 }
 
-// HealthHandler 用于健康检查
+// HealthHandler for health checks.
 type HealthHandler struct {
 	db db.Database
 }
@@ -94,7 +90,6 @@ func NewHealthHandler(db2 db.Database) *HealthHandler {
 }
 
 func (h *HealthHandler) Check(c *gin.Context) {
-
 	sqlDB, err := h.db.GetDB().DB()
 	if err != nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "down", "error": "failed to get db instance"})
@@ -104,19 +99,18 @@ func (h *HealthHandler) Check(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "down", "error": "db ping failed"})
 		return
 	}
-
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-// providerSet 集合了所有组件的构造函数。
+// providerSet aggregates providers for all components.
 var providerSet = wire.NewSet(config.InitAppConfigStore, provideDiscovery,
 	provideAppConfig,
 	provideDatabase,
-	provideGinEngine,
-	NewHealthHandler, service.NewUserService, handles.NewUserHandler, NewApp,
+	provideHttpServer,
+	provideTracer,
+	NewHealthHandler, storage.NewUserStorage, service.NewUserService, handles.NewUserHandler, NewApp,
 )
 
-// provideAppConfig 现在依赖于 ConfigInputs 结构体，解决了多字符串参数问题。
 func provideAppConfig(cfgStore *models.AppConfigStore, discoveryClient *discovery.Discovery, inputs ConfigInputs) (*models.AppConfig, error) {
 	var provider config.AppConfigProvider
 	if cfgStore.StoreType == "consul" {
@@ -131,40 +125,68 @@ func provideAppConfig(cfgStore *models.AppConfigStore, discoveryClient *discover
 	return config.GetAppConfig(), nil
 }
 
-// provideDiscovery 现在依赖于引导配置 cfgStore
 func provideDiscovery(cfgStore *models.AppConfigStore, inputs ConfigInputs) (*discovery.Discovery, func(), error) {
 	discoveryClient, err := discovery.NewDiscovery(cfgStore.Consul.Host)
 	if err != nil {
 		return nil, nil, err
 	}
 	cleanup := func() {
+		logger.Info("Deregistering service from Consul...", inputs.ServerName)
 		discoveryClient.DeRegister(inputs.ServerName)
 	}
 	return discoveryClient, cleanup, nil
 }
 
+func provideTracer(cfg *models.AppConfig, inputs ConfigInputs) (func(), error) {
+	if !cfg.Tracing.Enable {
+		return func() {}, nil
+	}
+	shutdown, err := tracing.InitTracerProvider(inputs.ServerName, cfg.Tracing.Endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize tracer: %w", err)
+	}
+	cleanup := func() {
+		logger.Info("Shutting down tracer provider...", inputs.ServerName)
+		if err := shutdown(context.Background()); err != nil {
+			logger.Error(err, "Failed to shutdown tracer provider", inputs.ServerName)
+		}
+	}
+	return cleanup, nil
+}
+
 func provideDatabase(cfg *models.AppConfig) (db.Database, error) {
-	dbase, err := db.NewEasyDatabaseWithPool(cfg.Database.Type, fmt.Sprintf("%s://%s:%s@%s:%d/%s",
-		cfg.Database.Type, cfg.Database.UserName, cfg.Database.Password, cfg.Database.Host, cfg.Database.Port, cfg.Database.Database), cfg.Database)
+	dsn := url.URL{
+		Scheme: cfg.Database.Type,
+		User:   url.UserPassword(cfg.Database.UserName, cfg.Database.Password),
+		Host:   fmt.Sprintf("%s:%d", cfg.Database.Host, cfg.Database.Port),
+		Path:   cfg.Database.Database,
+	}
+	dbase, err := db.NewEasyDatabaseWithPool(cfg.Database.Type, dsn.String(), cfg.Database)
 	if err != nil {
 		return nil, err
 	}
-
 	if err := dbase.AutoMigrate(&models.User{}); err != nil {
 		return nil, err
 	}
 	return dbase, nil
 }
 
-func provideGinEngine(userHandler *handles.UserHandler, healthHandler *HealthHandler) *gin.Engine {
+func provideHttpServer(userHandler *handles.UserHandler, healthHandler *HealthHandler, cfg *models.AppConfig, inputs ConfigInputs) *http.Server {
 	g := gin.Default()
 
-	g.GET("/health", healthHandler.Check)
+	if cfg.Tracing.Enable {
+		g.Use(otelgin.Middleware(inputs.ServerName))
+	}
 
+	g.GET("/health", healthHandler.Check)
 	userRoutes := g.Group("/users")
 	{
 		userRoutes.GET("/:id", userHandler.GetUserByID)
 		userRoutes.POST("/", userHandler.CreateUser)
 	}
-	return g
+
+	return &http.Server{
+		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),
+		Handler: g,
+	}
 }

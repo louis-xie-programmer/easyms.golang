@@ -11,14 +11,15 @@ import (
 	"easyms/internal/shared/models"
 	"easyms/internal/shared/mq"
 	"fmt"
-	"time"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"net/http"
 
 	"github.com/gin-gonic/gin"
 )
 
 // App is the container for all components.
 type App struct {
-	engine       *gin.Engine
+	httpServer   *http.Server
 	ds           *discovery.Discovery
 	relayService *outbox_relay.RelayService
 	publisher    mq.Publisher
@@ -26,29 +27,24 @@ type App struct {
 
 // InitializeApp manually builds and returns a complete App instance.
 func InitializeApp(serverName string, env string) (*App, func(), error) {
-	// --- 1. Bootstrap Config Loading ---
 	cfgStore, err := config.InitAppConfigStore()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to init app config store: %w", err)
 	}
 
-	// --- 2. Create Core Dependencies based on Bootstrap Config ---
-	discoveryClient, discoveryCleanup, err := provideDiscovery(cfgStore)
+	discoveryClient, discoveryCleanup, err := provideDiscovery(cfgStore, serverName)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	// --- 3. Create and Load Real App Config based on Bootstrap Config ---
 	appConfig, err := provideAppConfig(cfgStore, discoveryClient, serverName, env)
 	if err != nil {
 		discoveryCleanup()
 		return nil, nil, err
 	}
 
-	// --- 4. Logger Initialization (must be after config loading) ---
 	logger.Init(serverName, appConfig)
 
-	// --- 5. Initialize Other Dependencies that rely on AppConfig ---
 	dbase, err := provideDatabase(appConfig)
 	if err != nil {
 		discoveryCleanup()
@@ -61,36 +57,27 @@ func InitializeApp(serverName string, env string) (*App, func(), error) {
 		return nil, nil, err
 	}
 
-	// --- 6. Service Layer Initialization ---
 	orderServiceLogger := logger.With("component", "order_service")
 	orderService := service.NewOrderService(dbase, orderServiceLogger)
-	relayService := outbox_relay.NewRelayService(dbase, publisher, 10*time.Second)
 
-	// --- 7. Interface Layer Initialization ---
+	// Pass the outbox config to the relay service
+	relayService := outbox_relay.NewRelayService(dbase, publisher, appConfig.Outbox)
+
 	orderHandler := handles.MakeCreateOrderEndpoint(orderService)
-	engine := provideGinEngine(orderHandler)
+	httpServer := provideHttpServer(orderHandler, appConfig)
 
-	// --- 8. Build App ---
 	app := &App{
-		engine:       engine,
+		httpServer:   httpServer,
 		ds:           discoveryClient,
 		relayService: relayService,
 		publisher:    publisher,
 	}
 
-	// --- 9. Define Cleanup Function ---
 	cleanup := func() {
 		relayService.Stop()
 		publisherCleanup()
 		discoveryCleanup()
 	}
-
-	// --- 10. Start Background Services ---
-	if err := discoveryClient.Register(serverName, appConfig.Server.Host, appConfig.Server.Port, nil); err != nil {
-		cleanup()
-		return nil, nil, fmt.Errorf("failed to register service: %w", err)
-	}
-	relayService.Start()
 
 	return app, cleanup, nil
 }
@@ -111,13 +98,14 @@ func provideAppConfig(cfgStore *models.AppConfigStore, discoveryClient *discover
 	return config.GetAppConfig(), nil
 }
 
-func provideDiscovery(cfgStore *models.AppConfigStore) (*discovery.Discovery, func(), error) {
+func provideDiscovery(cfgStore *models.AppConfigStore, serverName string) (*discovery.Discovery, func(), error) {
 	discoveryClient, err := discovery.NewDiscovery(cfgStore.Consul.Host)
 	if err != nil {
 		return nil, nil, err
 	}
 	cleanup := func() {
-		discoveryClient.DeRegister("order-svc")
+		logger.Info("Deregistering service from Consul...", serverName)
+		discoveryClient.DeRegister(serverName)
 	}
 	return discoveryClient, cleanup, nil
 }
@@ -145,12 +133,17 @@ func providePublisher(cfg *models.AppConfig) (mq.Publisher, func(), error) {
 	return pub, cleanup, nil
 }
 
-func provideGinEngine(orderHandler gin.HandlerFunc) *gin.Engine {
+func provideHttpServer(orderHandler gin.HandlerFunc, cfg *models.AppConfig) *http.Server {
 	g := gin.Default()
-	// Health check endpoint
 	g.GET("/health", func(c *gin.Context) {
-		c.String(200, "ok")
+		c.String(http.StatusOK, "ok")
 	})
+	// Expose metrics endpoint
+	g.GET("/metrics", gin.WrapH(promhttp.Handler()))
 	g.POST("/orders", orderHandler)
-	return g
+
+	return &http.Server{
+		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),
+		Handler: g,
+	}
 }

@@ -8,9 +8,13 @@ import (
 	"time"
 )
 
-// --- Gateway Specific Models ---
+// --- Service Specific Models ---
 
-// ProxyConfig holds configuration for the reverse proxy transport.
+type OutboxConfig struct {
+	RelayInterval time.Duration `yaml:"relay_interval"`
+	BatchSize     int           `yaml:"batch_size"`
+}
+
 type ProxyConfig struct {
 	ConnectTimeout        time.Duration `yaml:"connect_timeout"`
 	ResponseHeaderTimeout time.Duration `yaml:"response_header_timeout"`
@@ -19,7 +23,6 @@ type ProxyConfig struct {
 	IdleConnTimeout       time.Duration `yaml:"idle_conn_timeout"`
 }
 
-// GatewayConfig holds all gateway-specific configurations.
 type GatewayConfig struct {
 	RouteRules     []*RouteRule          `yaml:"route_rules"`
 	RateLimit      *RateLimitConfig      `yaml:"rate_limit"`
@@ -28,7 +31,32 @@ type GatewayConfig struct {
 	Proxy          *ProxyConfig          `yaml:"proxy,omitempty"`
 }
 
-// RouteRule defines a routing rule.
+// ... (rest of the file is the same)
+
+// --- Shared Application Models ---
+
+type AppConfig struct {
+	Log      LogConfig      `yaml:"log,omitempty"`
+	Loki     LokiConfig     `yaml:"loki,omitempty"`
+	Server   ServerConfig   `yaml:"server,omitempty"`
+	Database DatabaseConfig `yaml:"database,omitempty"`
+	RabbitMQ RabbitMQConfig `yaml:"rabbitmq,omitempty"`
+	Tracing  TracingConfig  `yaml:"tracing,omitempty"`
+	OAuth2   OAuth2Config   `yaml:"oauth2,omitempty"`
+	Cache    struct {
+		Redis RedisConfig `yaml:"redis,omitempty"`
+	} `yaml:"cache,omitempty"`
+	Consul ConsulConfig `yaml:"consul,omitempty"`
+
+	// Service-specific configurations
+	Gateway *GatewayConfig `yaml:"gateway,omitempty"`
+	Outbox  *OutboxConfig  `yaml:"outbox,omitempty"` // Added Outbox config
+
+	ConfigLock sync.RWMutex `yaml:"-"`
+}
+
+// ... (rest of the file from ServerConfig down is the same)
+// I will append the rest of the file content to ensure it's complete.
 type RouteRule struct {
 	ServiceName   string            `yaml:"service_name"`
 	PathPrefix    string            `yaml:"path_prefix"`
@@ -39,7 +67,6 @@ type RouteRule struct {
 	RemoveHeaders []string          `yaml:"remove_headers,omitempty"`
 }
 
-// RateLimitConfig holds rate-limiting rules.
 type RateLimitConfig struct {
 	IPLimits     []IPLimitRule `yaml:"ip_limits"`
 	UALimits     []UALimitRule `yaml:"ua_limits"`
@@ -61,12 +88,10 @@ type UALimitRule struct {
 	Regexp  *regexp.Regexp `yaml:"-"`
 }
 
-// CircuitBreakerConfig holds circuit breaker rules.
 type CircuitBreakerConfig struct {
 	Services map[string]*CircuitBreakerServiceConfig `yaml:"services"`
 }
 
-// CircuitBreakerServiceConfig defines rules for a specific service.
 type CircuitBreakerServiceConfig struct {
 	CounterResetInterval int64   `yaml:"counter_reset_interval"`
 	HalfOpenMaxSuccesses int64   `yaml:"half_open_max_successes"`
@@ -74,56 +99,32 @@ type CircuitBreakerServiceConfig struct {
 	FailureRateThreshold float64 `yaml:"failure_rate_threshold"`
 }
 
-// AuthConfig holds gateway's own credentials.
 type AuthConfig struct {
 	ClientID     string `yaml:"client_id"`
 	ClientSecret string `yaml:"client_secret"`
 }
 
-// --- Shared Application Models ---
-
-// OAuth2Config defines OAuth2 related settings.
 type OAuth2Config struct {
 	JWTSecret string `yaml:"jwt_secret"`
 	Issuer    string `yaml:"issuer"`
 }
 
-// AppConfig is the root configuration object for any service.
-type AppConfig struct {
-	Log      LogConfig      `yaml:"log,omitempty"`
-	Loki     LokiConfig     `yaml:"loki,omitempty"`
-	Server   ServerConfig   `yaml:"server,omitempty"`
-	Database DatabaseConfig `yaml:"database,omitempty"`
-	RabbitMQ RabbitMQConfig `yaml:"rabbitmq,omitempty"`
-	Tracing  TracingConfig  `yaml:"tracing,omitempty"`
-	OAuth2   OAuth2Config   `yaml:"oauth2,omitempty"`
-	Cache    struct {
-		Redis RedisConfig `yaml:"redis,omitempty"`
-	} `yaml:"cache,omitempty"`
-	Consul     ConsulConfig   `yaml:"consul,omitempty"`
-	Gateway    *GatewayConfig `yaml:"gateway,omitempty"`
-	ConfigLock sync.RWMutex   `yaml:"-"`
-}
-
-// AppConfigStore is used to parse the initial app.yaml.
 type AppConfigStore struct {
 	Env       string       `yaml:"env"`
 	StoreType string       `yaml:"store_type"`
 	Consul    ConsulConfig `yaml:"consul"`
 }
 
-// ConsulConfig holds Consul connection details.
 type ConsulConfig struct {
 	Host            string `yaml:"host"`
 	KeyPath         string `yaml:"key_path"`
 	ReloadOnChanges bool   `yaml:"reload_on_changes"`
 }
 
-// ServerConfig defines server settings.
 type ServerConfig struct {
 	Host     string    `yaml:"host"`
-	Port     int       `yaml:"port"`      // HTTP Port
-	GrpcPort int       `yaml:"grpc_port"` // gRPC Port
+	Port     int       `yaml:"port"`
+	GrpcPort int       `yaml:"grpc_port"`
 	Tls      TLSConfig `yaml:"tls"`
 }
 
@@ -131,7 +132,7 @@ func (s *ServerConfig) Validate() error {
 	if s.Port <= 0 || s.Port > 65535 {
 		return fmt.Errorf("invalid server port: %d", s.Port)
 	}
-	if s.GrpcPort <= 0 || s.GrpcPort > 65535 {
+	if s.GrpcPort != 0 && (s.GrpcPort <= 0 || s.GrpcPort > 65535) {
 		return fmt.Errorf("invalid gRPC port: %d", s.GrpcPort)
 	}
 	return nil
