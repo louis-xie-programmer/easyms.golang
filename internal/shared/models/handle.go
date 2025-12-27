@@ -11,7 +11,7 @@ type CheckTokenResponse struct {
 }
 
 type RefreshTokenRequest struct {
-	RefreshToken string `json:"refresh_token"`
+	RefreshToken string `json:"refresh_token" binding:"required"`
 }
 
 type TokenResponse struct {
@@ -21,12 +21,12 @@ type TokenResponse struct {
 }
 
 type LoginRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username string `json:"username" binding:"required,alphanum,min=4,max=30"`
+	Password string `json:"password" binding:"required,min=8,max=100"`
 }
 
 type RegisterClientRequest struct {
-	ClientId string `json:"client_id"`
+	ClientId string `json:"client_id" binding:"required,alphanum,min=4,max=50"`
 }
 
 type RegisterClientResponse struct {
@@ -35,14 +35,14 @@ type RegisterClientResponse struct {
 }
 
 type RegisterUserRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username string `json:"username" binding:"required,alphanum,min=4,max=30"`
+	Password string `json:"password" binding:"required,min=8,max=100"`
 }
 
 type ClientTokenRequest struct {
-	GrantType    string `json:"grant_type"`
-	ClientId     string `json:"client_id"`
-	ClientSecret string `json:"client_secret"`
+	GrantType    string `json:"grant_type" binding:"required,eq=client_credentials"`
+	ClientId     string `json:"client_id" binding:"required"`
+	ClientSecret string `json:"client_secret" binding:"required"`
 }
 
 type TokenRequest struct {
