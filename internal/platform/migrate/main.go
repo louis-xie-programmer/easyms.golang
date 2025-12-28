@@ -7,6 +7,7 @@
 package main
 
 import (
+	"context"
 	. "easyms/internal/shared/models"
 	"flag"
 	"fmt"
@@ -71,9 +72,12 @@ func main() {
 		// 迁移所有auth-svc相关的模型
 		models := []interface{}{
 			&ClientDetails{},
-			&UserDetails{},
+			&User{},
 			&RevokedToken{},
 			&UserAuthority{},
+			&Order{},
+			&OrderItem{},
+			&OAuth2Details{},
 		}
 
 		err = database.AutoMigrate(models...)
@@ -128,28 +132,25 @@ func main() {
 
 // createTestUsers 创建测试用户
 // 创建默认测试用户并保存到数据库
-func createTestUsers(dbase db.Database) map[string]*UserDetails {
-	users := map[string]*UserDetails{
+func createTestUsers(dbase db.Database) map[string]*User {
+	users := map[string]*User{
 		"user1": {
 			Username:    "user1",
-			Password:    "password1",
 			Authorities: "USER",
 		},
 		"admin": {
 			Username:    "admin",
-			Password:    "password2",
 			Authorities: "USER,ADMIN",
 		},
 	}
 
 	// 为用户生成密码哈希
 	for _, user := range users {
-		err := user.HashPassword()
+		err := user.SetPassword("password")
 		if err != nil {
 			fmt.Printf("Failed to hash password for user %s: %v\n", user.Username, err)
 			os.Exit(-1)
 		}
-		user.Password = "" // 清除明文密码
 
 		// 自动迁移用户表结构
 		//err = dbase.AutoMigrate(user)
@@ -159,14 +160,14 @@ func createTestUsers(dbase db.Database) map[string]*UserDetails {
 
 		// 检查用户是否已存在
 		var count int64
-		count, err = dbase.Count("SELECT COUNT(*) FROM user_details WHERE username = ?", user.Username)
+		count, err = dbase.Count(context.Background(), "SELECT COUNT(*) FROM users WHERE username = ?", user.Username)
 
 		if err == nil && count > 0 {
 			continue // 已存在，跳过创建
 		}
 
 		// 用户不存在，插入新用户
-		err = dbase.Insert(user)
+		err = dbase.Insert(context.Background(), user)
 		if err != nil {
 			fmt.Printf("Failed to insert user %s: %v\n", user.Username, err)
 		}
@@ -206,13 +207,13 @@ func createTestClients(dbase db.Database) map[string]*ClientDetails {
 
 		// 检查客户端是否已存在
 		var count int64
-		count, err := dbase.Count("SELECT COUNT(*) FROM client_details WHERE client_id = ?", client.ClientId)
+		count, err := dbase.Count(context.Background(), "SELECT COUNT(*) FROM client_details WHERE client_id = ?", client.ClientId)
 		if err == nil && count > 0 {
 			continue // 已存在，跳过创建
 		}
 
 		// 自动迁移客户端表结构
-		err = dbase.Insert(client)
+		err = dbase.Insert(context.Background(), client)
 		if err != nil {
 			fmt.Printf("Failed to auto migrate client: %v\n", err)
 		}
@@ -247,7 +248,7 @@ func createTestUserAuthorities(dbase db.Database) {
 	}
 
 	for _, authority := range authorities {
-		dbase.Insert(&authority)
+		dbase.Insert(context.Background(), &authority)
 	}
 
 }
