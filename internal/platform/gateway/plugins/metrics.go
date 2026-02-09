@@ -1,44 +1,72 @@
+// Package plugins contains all gateway plugins.
 package plugins
 
 import (
 	"easyms/internal/platform/gateway/plugin"
+	"easyms/internal/shared/logger"
 	"github.com/prometheus/client_golang/prometheus"
+	"math"
+	"math/rand"
 	"strconv"
+	"sync/atomic"
 	"time"
 )
 
 var (
-	// requestDuration 记录请求处理的延迟分布
 	requestDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "gateway_request_duration_seconds",
-			Help:    "Time taken to process request",
+			Help:    "Gateway request latency in seconds",
 			Buckets: prometheus.DefBuckets,
 		},
-		[]string{"service", "method", "status"},
+		[]string{"service", "route", "instance", "method", "status"},
 	)
-
-	// requestTotal 记录请求总数
 	requestTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "gateway_requests_total",
-			Help: "Total number of requests",
+			Help: "Total gateway requests",
 		},
-		[]string{"service", "method", "status"},
+		[]string{"service", "route", "instance", "method", "status"},
 	)
 )
 
 func init() {
-	// 注册指标到 Prometheus 的默认注册表
+	rand.Seed(time.Now().UnixNano())
 	prometheus.MustRegister(requestDuration)
 	prometheus.MustRegister(requestTotal)
 }
 
-// MetricsPlugin 负责收集网关的监控指标
-type MetricsPlugin struct{}
+// MetricsPlugin collects gateway request metrics.
+type MetricsPlugin struct {
+	sampleRateBits uint64
+}
 
-func NewMetricsPlugin() *MetricsPlugin {
-	return &MetricsPlugin{}
+func NewMetricsPlugin(sampleRate float64) *MetricsPlugin {
+	p := &MetricsPlugin{}
+	p.UpdateSampleRate(sampleRate)
+	return p
+}
+
+func (p *MetricsPlugin) UpdateSampleRate(sampleRate float64) {
+	original := sampleRate
+	if sampleRate < 0 {
+		sampleRate = 0
+	}
+	if sampleRate > 1 {
+		sampleRate = 1
+	}
+	if original != sampleRate {
+		logger.Warn("Metrics sample rate out of range, clamped", "gateway", "value", original, "clamped", sampleRate)
+	}
+	prev := p.sampleRate()
+	atomic.StoreUint64(&p.sampleRateBits, math.Float64bits(sampleRate))
+	if prev != sampleRate {
+		logger.Info("Metrics sample rate updated", "gateway", "sample_rate", sampleRate)
+	}
+}
+
+func (p *MetricsPlugin) sampleRate() float64 {
+	return math.Float64frombits(atomic.LoadUint64(&p.sampleRateBits))
 }
 
 func (p *MetricsPlugin) Name() string {
@@ -46,27 +74,38 @@ func (p *MetricsPlugin) Name() string {
 }
 
 func (p *MetricsPlugin) Order() int {
-	// 必须是最先执行的插件之一，以便覆盖整个请求生命周期
 	return 0
 }
 
 func (p *MetricsPlugin) Execute(ctx *plugin.Context) {
 	start := time.Now()
-
-	// 继续执行后续插件
 	ctx.Next()
 
-	// 请求处理完成后，收集指标
 	duration := time.Since(start).Seconds()
 	statusCode := strconv.Itoa(ctx.StatusCode())
 	method := ctx.Request.Method
 
-	// 尝试获取目标服务名，如果未匹配到路由，则标记为 "unknown"
 	serviceName := "unknown"
-	if val, ok := ctx.Get("serviceName"); ok {
-		serviceName = val.(string)
+	if val, ok := ctx.Get(ServiceNameKey); ok {
+		if name, ok := val.(string); ok && name != "" {
+			serviceName = name
+		}
+	}
+	routeLabel := "unknown"
+	if val, ok := ctx.Get(RoutePathPrefixKey); ok {
+		if route, ok := val.(string); ok && route != "" {
+			routeLabel = route
+		}
+	}
+	instanceLabel := "unknown"
+	if val, ok := ctx.Get(UpstreamInstanceKey); ok {
+		if inst, ok := val.(string); ok && inst != "" {
+			instanceLabel = inst
+		}
 	}
 
-	requestDuration.WithLabelValues(serviceName, method, statusCode).Observe(duration)
-	requestTotal.WithLabelValues(serviceName, method, statusCode).Inc()
+	if ctx.StatusCode() >= 500 || rand.Float64() < p.sampleRate() {
+		requestDuration.WithLabelValues(serviceName, routeLabel, instanceLabel, method, statusCode).Observe(duration)
+	}
+	requestTotal.WithLabelValues(serviceName, routeLabel, instanceLabel, method, statusCode).Inc()
 }

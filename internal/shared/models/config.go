@@ -21,9 +21,15 @@ type ProxyConfig struct {
 	MaxIdleConns          int           `yaml:"max_idle_conns"`
 	MaxIdleConnsPerHost   int           `yaml:"max_idle_conns_per_host"`
 	IdleConnTimeout       time.Duration `yaml:"idle_conn_timeout"`
+	MaxConnsPerHost       int           `yaml:"max_conns_per_host"`
+	TLSHandshakeTimeout   time.Duration `yaml:"tls_handshake_timeout"`
+	ExpectContinueTimeout time.Duration `yaml:"expect_continue_timeout"`
+	MaxRetries            int           `yaml:"max_retries"`
+	RetryBackoff          time.Duration `yaml:"retry_backoff"`
 }
 
 type GatewayConfig struct {
+	Metrics        *MetricsConfig        `yaml:"metrics"`
 	RouteRules     []*RouteRule          `yaml:"route_rules"`
 	RateLimit      *RateLimitConfig      `yaml:"rate_limit"`
 	CircuitBreaker *CircuitBreakerConfig `yaml:"circuit_breaker"`
@@ -100,8 +106,12 @@ type CircuitBreakerServiceConfig struct {
 }
 
 type AuthConfig struct {
-	ClientID     string `yaml:"client_id"`
-	ClientSecret string `yaml:"client_secret"`
+	Enable                 bool     `yaml:"enable"`
+	Scheme                 string   `yaml:"scheme"`
+	CacheExpirationSeconds int      `yaml:"cache_expiration_seconds"`
+	SkipPaths              []string `yaml:"skip_paths"`
+	ClientID               string   `yaml:"client_id"`
+	ClientSecret           string   `yaml:"client_secret"`
 }
 
 type OAuth2Config struct {
@@ -182,7 +192,7 @@ type RabbitMQConfig struct {
 
 type TracingConfig struct {
 	Enable   bool   `yaml:"enable"`
-	Endpoint string `yaml:"endpoint"`
+	Endpoint string `yaml:"endpoint" validate:"required_if=Enable true,omitempty,url"`
 }
 
 type ConfigVersion struct {
@@ -190,4 +200,10 @@ type ConfigVersion struct {
 	Timestamp   time.Time `json:"timestamp"`
 	Description string    `json:"description"`
 	ConfigData  string    `json:"config_data"`
+}
+
+// MetricsConfig defines gateway metrics settings.
+type MetricsConfig struct {
+	SampleRate         float64  `yaml:"sample_rate"`
+	UpstreamSampleRate *float64 `yaml:"upstream_sample_rate"`
 }

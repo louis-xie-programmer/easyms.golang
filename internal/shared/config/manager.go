@@ -56,7 +56,7 @@ func (cm *ConfigurationManager) EnsureBasicConfig(config *models.AppConfig, isGa
 	if config.Log == (models.LogConfig{}) {
 		config.Log = models.LogConfig{
 			LogLevel: "info",
-			LogType:  "zerolog",
+			LogType:  "local",
 		}
 	}
 

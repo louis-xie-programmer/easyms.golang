@@ -1,63 +1,42 @@
+# 网关服务特定配置 (dev 环境)
+
 server:
   host: "172.29.16.1"
-  port: 10000
-tracing:
-  enable: true
-  endpoint: "http://172.29.16.1:14268/api"
+  port: 10000 # 覆盖共享配置中的端口
+
 gateway:
   route_rules:
     - service_name: "user-svc"
       path_prefix: "/api/users"
       strip_prefix: true
-      path_rewrite: "^/([^/]+)(/.*)?$"
-      rewrite_target: "$2"
-      add_headers:
-        X-Forwarded-By: "api-gateway"
-        X-Original-Path: "{{.RequestPath}}"
-      remove_headers:
-        - "X-Internal-Header"
-    - service_name: "auth-svc"
-      path_prefix: "/api/auth"
-      strip_prefix: true
-      add_headers:
-        X-Forwarded-By: "api-gateway"
     - service_name: "order-svc"
       path_prefix: "/api/orders"
+      strip_prefix: true
+  
+  auth:
+    enable: true
+    scheme: "Bearer"
+    client_id: "gateway-client"
+    client_secret: "gateway-secret"
+    skip_paths:
+      - "/api/auth/token"
+      - "/health"
 
   rate_limit:
     default_rate: 100
     default_burst: 200
-    ip_limits:
-      - cidr: "192.168.1.0/24"
-        rate: 50
-        burst: 100
-    ua_limits:
-      - pattern: "bot"
-        rate: 10
-        burst: 20
-
-  circuit_breaker:
-    services:
-      user-svc:
-        counter_reset_interval: 30
-        half_open_max_successes: 2
-        failure_rate_window: 10
-        failure_rate_threshold: 0.5
-      auth-svc:
-        counter_reset_interval: 60
-        half_open_max_successes: 3
-        failure_rate_window: 15
-        failure_rate_threshold: 0.3
-
-  # Reverse Proxy Transport Configuration
   proxy:
-    connect_timeout: "5s"
-    response_header_timeout: "30s"
-    max_idle_conns: 200
-    max_idle_conns_per_host: 50
-    idle_conn_timeout: "90s"
+    connect_timeout: 5s
+    response_header_timeout: 30s
+    max_idle_conns: 100
+    max_idle_conns_per_host: 20
+    max_conns_per_host: 0 # 0 = unlimited
+    idle_conn_timeout: 90s
+    tls_handshake_timeout: 10s
+    expect_continue_timeout: 1s
+    max_retries: 2 # idempotent requests only
+    retry_backoff: 100ms
+  metrics:
+    sample_rate: 0.1
+    upstream_sample_rate: 1.0
 
-  # Gateway's own credentials for authentication
-  auth:
-    client_id: "gateway-client"
-    client_secret: "gateway-secret"

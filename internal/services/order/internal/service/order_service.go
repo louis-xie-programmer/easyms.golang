@@ -1,3 +1,4 @@
+// Package service 包含了订单服务的核心业务逻辑。
 package service
 
 import (
@@ -12,35 +13,40 @@ import (
 
 const serviceName = "order_service"
 
-// --- Data Transfer Objects (DTOs) ---
+// --- 数据传输对象 (DTOs) ---
 
-// CreateOrderRequestDTO is used to pass order creation data to the service layer.
+// CreateOrderRequestDTO 用于在服务层传递订单创建请求的数据。
 type CreateOrderRequestDTO struct {
-	UserID     uint
-	OrderItems []CreateOrderItemDTO
+	UserID     uint                 // 下单用户ID
+	OrderItems []CreateOrderItemDTO // 订单项列表
 }
 
-// CreateOrderItemDTO holds data for a single item in the order.
+// CreateOrderItemDTO 包含了订单中单个商品项的数据。
 type CreateOrderItemDTO struct {
-	ProductID uint
-	Quantity  int
-	Price     float64
+	ProductID uint    // 商品ID
+	Quantity  int     // 商品数量
+	Price     float64 // 商品单价
 }
 
-// --- Service Definition ---
+// --- 服务接口定义 ---
 
-// OrderService defines the interface for the order service.
+// OrderService 定义了订单服务的标准接口。
+// 它抽象了所有与订单相关的业务操作。
 type OrderService interface {
+	// CreateOrder 创建一个新订单，并处理相关的业务逻辑和事件发布。
 	CreateOrder(ctx context.Context, req *CreateOrderRequestDTO) (*models.Order, error)
 }
 
-// orderService implements the OrderService interface.
+// orderService 是 OrderService 接口的具体实现。
+// 它依赖于 db.Database 接口来处理数据持久化，并使用 logger 进行日志记录。
 type orderService struct {
 	db  db.Database
 	log *logger.Logger
 }
 
-// NewOrderService creates a new order service instance.
+// NewOrderService 创建一个新的 orderService 实例。
+// db: 数据库接口实例。
+// log: 日志记录器实例。
 func NewOrderService(db db.Database, log *logger.Logger) OrderService {
 	return &orderService{
 		db:  db,
@@ -48,18 +54,18 @@ func NewOrderService(db db.Database, log *logger.Logger) OrderService {
 	}
 }
 
-// CreateOrder creates a new order, calculates totals, and stores an "order.created" event.
+// CreateOrder 创建一个新订单。
+// 该方法包含了订单创建的业务逻辑，包括构建订单模型、计算总金额，
+// 并在一个数据库事务中完成订单的持久化和 Outbox 事件的创建。
 func (s *orderService) CreateOrder(ctx context.Context, req *CreateOrderRequestDTO) (*models.Order, error) {
-	// --- Business logic is now inside the service layer ---
-
-	// 1. Build the domain model from the DTO.
+	// 1. 从 DTO 构建领域模型。
 	order := &models.Order{
 		UserID:     req.UserID,
-		Status:     models.StatusPending,
+		Status:     models.StatusPending, // 初始状态为待处理
 		OrderItems: make([]models.OrderItem, len(req.OrderItems)),
 	}
 
-	// 2. Perform calculations.
+	// 2. 执行业务计算，例如计算订单总金额。
 	var total float64
 	for i, item := range req.OrderItems {
 		order.OrderItems[i] = models.OrderItem{
@@ -71,19 +77,20 @@ func (s *orderService) CreateOrder(ctx context.Context, req *CreateOrderRequestD
 	}
 	order.TotalAmount = total
 
-	// 3. Run the creation process in a transaction.
+	// 3. 在一个数据库事务中执行订单创建和 Outbox 事件存储，确保原子性。
 	err := s.db.RunInTransaction(ctx, func(tx db.TxTransaction) error {
-		// 3a. Create the order and order items.
+		// 3a. 创建订单及其订单项。
 		if err := tx.Insert(ctx, order); err != nil {
-			s.log.ErrorWithContext(ctx, err, "failed to create order in db", serviceName)
-			return fmt.Errorf("failed to create order in db: %w", err)
+			s.log.ErrorWithContext(ctx, err, "在数据库中创建订单失败", serviceName)
+			return fmt.Errorf("在数据库中创建订单失败: %w", err)
 		}
 
-		// 3b. Create and store the outbox event.
+		// 3b. 创建并存储 Outbox 事件。
+		// 这确保了订单创建成功后，相应的事件也会被持久化，等待 Relay 服务发送。
 		err := events.CreateAndStoreEvent(ctx, tx, constants.OrderTopic, constants.OrderCreatedEvent, order)
 		if err != nil {
-			s.log.ErrorWithContext(ctx, err, "failed to create and store outbox event", serviceName)
-			return fmt.Errorf("failed to create and store outbox event: %w", err)
+			s.log.ErrorWithContext(ctx, err, "创建并存储 Outbox 事件失败", serviceName)
+			return fmt.Errorf("创建并存储 Outbox 事件失败: %w", err)
 		}
 
 		return nil
@@ -93,6 +100,6 @@ func (s *orderService) CreateOrder(ctx context.Context, req *CreateOrderRequestD
 		return nil, err
 	}
 
-	s.log.InfoWithContext(ctx, "successfully created order and outbox event", serviceName, "order_id", order.ID)
+	s.log.InfoWithContext(ctx, "成功创建订单和 Outbox 事件", serviceName, "order_id", order.ID)
 	return order, nil
 }

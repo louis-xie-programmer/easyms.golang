@@ -8,10 +8,13 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	"go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
+	"net/url"
+	"strings"
 )
 
 // InitTracerProvider initializes and registers the OpenTelemetry Tracer Provider.
 func InitTracerProvider(serviceName, endpoint string) (func(context.Context) error, error) {
+	endpoint = normalizeEndpoint(endpoint)
 	// Create a new OTLP HTTP exporter.
 	// The exporter will connect to the given endpoint and by default append "/v1/traces".
 	exporter, err := otlptracehttp.New(context.Background(),
@@ -46,4 +49,29 @@ func InitTracerProvider(serviceName, endpoint string) (func(context.Context) err
 
 	// Return the shutdown function to be called on service exit.
 	return tp.Shutdown, nil
+}
+
+func normalizeEndpoint(endpoint string) string {
+	trimmed := strings.TrimSpace(endpoint)
+	if trimmed == "" {
+		return trimmed
+	}
+	if strings.Contains(trimmed, "://") {
+		if u, err := url.Parse(trimmed); err == nil {
+			if u.Host != "" {
+				return u.Host
+			}
+		}
+	}
+	if strings.Contains(trimmed, "/") {
+		if u, err := url.Parse("http://" + trimmed); err == nil {
+			if u.Host != "" {
+				return u.Host
+			}
+		}
+		if idx := strings.Index(trimmed, "/"); idx > 0 {
+			return trimmed[:idx]
+		}
+	}
+	return trimmed
 }

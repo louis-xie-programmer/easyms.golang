@@ -64,8 +64,8 @@ func NewServiceDiscovery(addr string) (*ServiceDiscovery, error) {
 		return nil, err
 	}
 
-	// 创建健康检查器
-	healthChecker := NewHTTPHealthChecker(3*time.Second, "/health")
+	// Rely on Consul health; skip local active checks.
+	healthChecker := &NoopHealthChecker{}
 	healthManager := NewServiceHealthManager(healthChecker)
 
 	sd := &ServiceDiscovery{

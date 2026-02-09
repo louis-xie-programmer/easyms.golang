@@ -1,27 +1,68 @@
+// Package plugins contains all gateway plugins.
 package plugins
 
 import (
 	"easyms/internal/platform/gateway/plugin"
 	"easyms/internal/shared/models"
 	"fmt"
-	lru "github.com/hashicorp/golang-lru/v2" // Use the thread-safe v2 root package
+	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/mercari/go-circuitbreaker"
+	"github.com/prometheus/client_golang/prometheus"
 	"log"
 	"net/http"
 	"sync"
 	"time"
 )
 
+// Prometheus metrics
+var (
+	circuitBreakerOpenTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "gateway_circuitbreaker_open_total",
+			Help: "Circuit breaker open rejections",
+		},
+		[]string{"service"},
+	)
+	circuitBreakerFailureTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "gateway_circuitbreaker_failures_total",
+			Help: "Circuit breaker protected failures",
+		},
+		[]string{"service"},
+	)
+	circuitBreakerState = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "gateway_circuitbreaker_state",
+			Help: "Circuit breaker state by service (1=open, 0=closed)",
+		},
+		[]string{"service", "state"},
+	)
+	circuitBreakerStateChangeTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "gateway_circuitbreaker_state_changes_total",
+			Help: "Circuit breaker state transitions",
+		},
+		[]string{"service", "from", "to"},
+	)
+	cbStateMu        sync.Mutex
+	cbStateByService = map[string]string{}
+)
+
+func init() {
+	prometheus.MustRegister(circuitBreakerOpenTotal)
+	prometheus.MustRegister(circuitBreakerFailureTotal)
+	prometheus.MustRegister(circuitBreakerState)
+	prometheus.MustRegister(circuitBreakerStateChangeTotal)
+}
+
 const defaultBreakerCacheSize = 256
 
-// CircuitBreakerPlugin provides circuit breaking functionality for upstream services.
 type CircuitBreakerPlugin struct {
 	config       *models.CircuitBreakerConfig
-	breakerCache *lru.Cache[string, *circuitbreaker.CircuitBreaker] // Thread-safe generic LRU
+	breakerCache *lru.Cache[string, *circuitbreaker.CircuitBreaker]
 	mu           sync.Mutex
 }
 
-// NewCircuitBreakerPlugin creates a new circuit breaker plugin from the given configuration.
 func NewCircuitBreakerPlugin(config *models.CircuitBreakerConfig) *CircuitBreakerPlugin {
 	if config == nil {
 		config = &models.CircuitBreakerConfig{
@@ -29,10 +70,9 @@ func NewCircuitBreakerPlugin(config *models.CircuitBreakerConfig) *CircuitBreake
 		}
 	}
 
-	// Create a thread-safe LRU cache with generics
 	cache, err := lru.New[string, *circuitbreaker.CircuitBreaker](defaultBreakerCacheSize)
 	if err != nil {
-		log.Fatalf("Failed to create LRU cache for circuit breakers: %v", err)
+		log.Fatalf("failed to create circuit breaker cache: %v", err)
 	}
 
 	return &CircuitBreakerPlugin{
@@ -49,9 +89,29 @@ func (p *CircuitBreakerPlugin) Order() int {
 	return 40
 }
 
+func setCircuitBreakerState(service string, state string) {
+	cbStateMu.Lock()
+	prev := cbStateByService[service]
+	if prev == "" {
+		prev = "unknown"
+	}
+	if prev != state {
+		circuitBreakerStateChangeTotal.WithLabelValues(service, prev, state).Inc()
+		cbStateByService[service] = state
+	}
+	cbStateMu.Unlock()
+
+	if state == "open" {
+		circuitBreakerState.WithLabelValues(service, "open").Set(1)
+		circuitBreakerState.WithLabelValues(service, "closed").Set(0)
+		return
+	}
+	circuitBreakerState.WithLabelValues(service, "open").Set(0)
+	circuitBreakerState.WithLabelValues(service, "closed").Set(1)
+}
+
 const (
 	UpstreamErrorKey = "upstreamError"
-	ServiceNameKey   = "serviceName"
 )
 
 func (p *CircuitBreakerPlugin) Execute(ctx *plugin.Context) {
@@ -62,22 +122,25 @@ func (p *CircuitBreakerPlugin) Execute(ctx *plugin.Context) {
 	}
 
 	cb := p.getBreaker(serviceName.(string))
-
 	operation := func() (interface{}, error) {
 		ctx.Next()
 		if err, exists := ctx.Get(UpstreamErrorKey); exists && err != nil {
 			return nil, err.(error)
 		}
+		setCircuitBreakerState(serviceName.(string), "closed")
 		return nil, nil
 	}
 
 	_, err := cb.Do(ctx.Request.Context(), operation)
-
 	if err != nil {
 		if err == circuitbreaker.ErrOpen {
-			http.Error(ctx.ResponseWriter, fmt.Sprintf("service '%s' is unavailable (circuit open)", serviceName), http.StatusServiceUnavailable)
+			circuitBreakerOpenTotal.WithLabelValues(serviceName.(string)).Inc()
+			setCircuitBreakerState(serviceName.(string), "open")
+			http.Error(ctx.ResponseWriter, fmt.Sprintf("service '%s' unavailable (circuit open)", serviceName), http.StatusServiceUnavailable)
 		} else {
-			http.Error(ctx.ResponseWriter, fmt.Sprintf("error from service '%s': %v", serviceName, err), http.StatusBadGateway)
+			circuitBreakerFailureTotal.WithLabelValues(serviceName.(string)).Inc()
+			setCircuitBreakerState(serviceName.(string), "closed")
+			http.Error(ctx.ResponseWriter, fmt.Sprintf("upstream error from '%s': %v", serviceName, err), http.StatusBadGateway)
 		}
 		return
 	}

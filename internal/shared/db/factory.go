@@ -1,3 +1,4 @@
+// Package db 提供了数据库访问的抽象层。
 package db
 
 import (
@@ -11,31 +12,37 @@ import (
 	"gorm.io/plugin/opentelemetry/tracing" // 引入 GORM OTel 插件
 )
 
-// DatabaseFactory 数据库工厂接口
+// DatabaseFactory 定义了创建数据库实例的工厂接口。
+// 这种工厂模式允许根据不同的需求 (如数据库类型、连接池配置) 灵活地创建数据库连接。
 type DatabaseFactory interface {
+	// CreateDatabase 根据数据库类型和连接字符串创建一个数据库实例，使用默认连接池配置。
 	CreateDatabase(dbType string, connStr string) (Database, error)
+	// CreateDatabaseWithPool 根据数据库类型、连接字符串和自定义连接池配置创建一个数据库实例。
 	CreateDatabaseWithPool(dbType string, connStr string, cfg interface{}) (Database, error)
+	// CreateReadWriteSplitDatabase 创建一个支持读写分离的数据库实例。
+	CreateReadWriteSplitDatabase(config ReadWriteSplitConfig) (Database, error)
 }
 
-// ReadWriteSplitConfig 读写分离配置
+// ReadWriteSplitConfig 读写分离配置，包含主库和从库的配置。
 type ReadWriteSplitConfig struct {
 	Master   DatabaseConfig   // 主库配置
 	Replicas []DatabaseConfig // 从库配置列表
 }
 
-// DefaultDatabaseFactory 默认数据库工厂实现
+// DefaultDatabaseFactory 是 DatabaseFactory 接口的默认实现。
 type DefaultDatabaseFactory struct{}
 
-// NewDatabaseFactory 创建数据库工厂实例
+// NewDatabaseFactory 创建并返回一个 DefaultDatabaseFactory 实例。
 func NewDatabaseFactory() DatabaseFactory {
 	return &DefaultDatabaseFactory{}
 }
 
-// createGormDB 是一个辅助函数，用于创建和配置 gorm.DB 实例
+// createGormDB 是一个辅助函数，用于创建和配置 GORM 的 *gorm.DB 实例。
+// 它负责注册 GORM 插件，如指标插件和 OpenTelemetry 追踪插件。
 func createGormDB(dialector gorm.Dialector, dbType string) (*gorm.DB, error) {
 	config := &gorm.Config{
-		SkipDefaultTransaction:                   true,
-		DisableForeignKeyConstraintWhenMigrating: true,
+		SkipDefaultTransaction:                   true,  // 默认跳过事务，手动控制事务
+		DisableForeignKeyConstraintWhenMigrating: true,  // 迁移时禁用外键约束
 	}
 
 	db, err := gorm.Open(dialector, config)
@@ -43,12 +50,12 @@ func createGormDB(dialector gorm.Dialector, dbType string) (*gorm.DB, error) {
 		return nil, err
 	}
 
-	// 注册我们的指标插件
+	// 注册自定义的指标插件，用于收集数据库操作的 Prometheus 指标
 	if err := db.Use(&MetricsPlugin{DBType: dbType}); err != nil {
 		return nil, err
 	}
 
-	// 注册 OpenTelemetry 插件
+	// 注册 OpenTelemetry 插件，用于分布式追踪
 	if err := db.Use(tracing.NewPlugin()); err != nil {
 		return nil, err
 	}
@@ -56,19 +63,12 @@ func createGormDB(dialector gorm.Dialector, dbType string) (*gorm.DB, error) {
 	return db, nil
 }
 
-// CreateDatabase 创建新的数据库实例
-// 根据数据库类型创建相应的数据库连接
-// 参数:
-//   - dbType: 数据库类型（mysql/postgres/sqlserver）
-//   - connStr: 数据库连接字符串
-//
-// 返回值:
-//   - Database: 数据库实例
-//   - error: 操作成功返回nil，失败返回具体错误
+// CreateDatabase 根据数据库类型和连接字符串创建一个数据库实例。
+// 它使用默认的连接池配置。
 func (f *DefaultDatabaseFactory) CreateDatabase(dbType string, connStr string) (Database, error) {
 	var dialector gorm.Dialector
 
-	// 根据数据库类型选择对应的驱动
+	// 根据数据库类型选择对应的 GORM 驱动
 	switch dbType {
 	case "mysql":
 		dialector = mysql.Open(connStr)
@@ -77,16 +77,16 @@ func (f *DefaultDatabaseFactory) CreateDatabase(dbType string, connStr string) (
 	case "sqlserver":
 		dialector = sqlserver.Open(connStr)
 	default:
-		return nil, fmt.Errorf("unsupported database type: %s", dbType)
+		return nil, fmt.Errorf("不支持的数据库类型: %s", dbType)
 	}
 
-	// 创建数据库连接并注册插件
+	// 创建 GORM 数据库连接并注册插件
 	db, err := createGormDB(dialector, dbType)
 	if err != nil {
 		return nil, err
 	}
 
-	// 根据数据库类型返回相应的实现
+	// 根据数据库类型返回相应的 Database 接口实现
 	switch dbType {
 	case "postgres":
 		return NewPostgresDatabase(db), nil
@@ -97,20 +97,11 @@ func (f *DefaultDatabaseFactory) CreateDatabase(dbType string, connStr string) (
 	}
 }
 
-// CreateDatabaseWithPool 创建带连接池配置的数据库实例
-// 根据数据库类型创建相应的数据库连接，并配置连接池参数
-// 参数:
-//   - dbType: 数据库类型（mysql/postgres/sqlserver）
-//   - connStr: 数据库连接字符串
-//   - cfg: 连接池配置
-//
-// 返回值:
-//   - Database: 数据库实例
-//   - error: 操作成功返回nil，失败返回具体错误
+// CreateDatabaseWithPool 根据数据库类型、连接字符串和自定义连接池配置创建一个数据库实例。
 func (f *DefaultDatabaseFactory) CreateDatabaseWithPool(dbType string, connStr string, cfg interface{}) (Database, error) {
 	var dialector gorm.Dialector
 
-	// 根据数据库类型选择对应的驱动
+	// 根据数据库类型选择对应的 GORM 驱动
 	switch dbType {
 	case "mysql":
 		dialector = mysql.Open(connStr)
@@ -119,17 +110,16 @@ func (f *DefaultDatabaseFactory) CreateDatabaseWithPool(dbType string, connStr s
 	case "sqlserver":
 		dialector = sqlserver.Open(connStr)
 	default:
-		return nil, fmt.Errorf("unsupported database type: %s", dbType)
+		return nil, fmt.Errorf("不支持的数据库类型: %s", dbType)
 	}
 
-	// 创建数据库连接并注册插件
+	// 创建 GORM 数据库连接并注册插件
 	db, err := createGormDB(dialector, dbType)
 	if err != nil {
 		return nil, err
 	}
 
 	// 配置连接池
-	// 设置连接池相关参数以优化数据库性能
 	if cfg != nil {
 		sqlDB, err := db.DB()
 		if err != nil {
@@ -139,31 +129,19 @@ func (f *DefaultDatabaseFactory) CreateDatabaseWithPool(dbType string, connStr s
 		// 根据不同的配置类型设置连接池参数
 		switch v := cfg.(type) {
 		case map[string]interface{}:
-			// 设置最大空闲连接数
-			// 控制连接池中空闲连接的最大数量
 			if maxIdleConns, ok := v["max_idle_conns"].(int); ok && maxIdleConns > 0 {
 				sqlDB.SetMaxIdleConns(maxIdleConns)
 			}
-
-			// 设置最大打开连接数
-			// 控制数据库连接的最大数量
 			if maxOpenConns, ok := v["max_open_conns"].(int); ok && maxOpenConns > 0 {
 				sqlDB.SetMaxOpenConns(maxOpenConns)
 			}
-
-			// 设置连接最大生命周期
-			// 控制连接可以被复用的最大时间
 			if connMaxLifetime, ok := v["conn_max_lifetime"].(int); ok && connMaxLifetime > 0 {
 				sqlDB.SetConnMaxLifetime(time.Duration(connMaxLifetime) * time.Second)
 			}
-
-			// 设置连接最大空闲时间
-			// 控制连接在池中保持空闲的最大时间
 			if connMaxIdleTime, ok := v["conn_max_idle_time"].(int); ok && connMaxIdleTime > 0 {
 				sqlDB.SetConnMaxIdleTime(time.Duration(connMaxIdleTime) * time.Second)
 			}
-		case *DatabaseConfig:
-			// 如果cfg是DatabaseConfig结构体类型，直接使用其字段
+		case *DatabaseConfig: // 如果传入的是 DatabaseConfig 结构体指针
 			if v.MaxIdleConns > 0 {
 				sqlDB.SetMaxIdleConns(v.MaxIdleConns)
 			}
@@ -179,7 +157,7 @@ func (f *DefaultDatabaseFactory) CreateDatabaseWithPool(dbType string, connStr s
 		}
 	}
 
-	// 根据数据库类型返回相应的实现
+	// 根据数据库类型返回相应的 Database 接口实现
 	switch dbType {
 	case "postgres":
 		return NewPostgresDatabase(db), nil
@@ -190,12 +168,13 @@ func (f *DefaultDatabaseFactory) CreateDatabaseWithPool(dbType string, connStr s
 	}
 }
 
-// CreateReadWriteSplitDatabase 创建支持读写分离的数据库实例
+// CreateReadWriteSplitDatabase 创建一个支持读写分离的数据库实例。
+// 它会初始化一个主库连接和多个从库连接。
 func (f *DefaultDatabaseFactory) CreateReadWriteSplitDatabase(config ReadWriteSplitConfig) (Database, error) {
 	// 创建主库连接
 	master, err := f.createSingleDatabase(config.Master)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create master database: %w", err)
+		return nil, fmt.Errorf("创建主数据库失败: %w", err)
 	}
 
 	// 创建从库连接
@@ -203,7 +182,7 @@ func (f *DefaultDatabaseFactory) CreateReadWriteSplitDatabase(config ReadWriteSp
 	for i, replicaConfig := range config.Replicas {
 		replica, err := f.createSingleDatabase(replicaConfig)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create replica database #%d: %w", i, err)
+			return nil, fmt.Errorf("创建从数据库 #%d 失败: %w", i, err)
 		}
 		replicas = append(replicas, replica.GetDB())
 	}
@@ -211,13 +190,14 @@ func (f *DefaultDatabaseFactory) CreateReadWriteSplitDatabase(config ReadWriteSp
 	return NewReadWriteSplitDatabase(master.GetDB(), replicas), nil
 }
 
-// createSingleDatabase 创建单个数据库连接
+// createSingleDatabase 是一个内部辅助函数，用于根据 DatabaseConfig 创建单个数据库连接。
 func (f *DefaultDatabaseFactory) createSingleDatabase(config DatabaseConfig) (Database, error) {
 	var dialector gorm.Dialector
+	// 构建数据库连接字符串
 	connStr := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local",
 		config.UserName, config.Password, config.Host, config.Port, config.Database)
 
-	// 根据数据库类型选择对应的驱动
+	// 根据数据库类型选择对应的 GORM 驱动
 	switch config.Type {
 	case "mysql":
 		dialector = mysql.Open(connStr)
@@ -226,10 +206,10 @@ func (f *DefaultDatabaseFactory) createSingleDatabase(config DatabaseConfig) (Da
 	case "sqlserver":
 		dialector = sqlserver.Open(connStr)
 	default:
-		return nil, fmt.Errorf("unsupported database type: %s", config.Type)
+		return nil, fmt.Errorf("不支持的数据库类型: %s", config.Type)
 	}
 
-	// 创建数据库连接并注册插件
+	// 创建 GORM 数据库连接并注册插件
 	gormDB, err := createGormDB(dialector, config.Type)
 	if err != nil {
 		return nil, err
@@ -256,7 +236,7 @@ func (f *DefaultDatabaseFactory) createSingleDatabase(config DatabaseConfig) (Da
 		}
 	}
 
-	// 根据数据库类型返回相应的实现
+	// 根据数据库类型返回相应的 Database 接口实现
 	switch config.Type {
 	case "postgres":
 		return NewPostgresDatabase(gormDB), nil

@@ -60,11 +60,10 @@ func main() {
 	}
 
 	if app.discovery != nil {
-		httpPort := app.config.Server.Port
 		grpcPort := app.config.Server.GrpcPort
 
 		healthCheck := &api.AgentServiceCheck{
-			HTTP:                           fmt.Sprintf("http://%s:%d/health", app.config.Server.Host, httpPort),
+			TCP:                            fmt.Sprintf("%s:%d", app.config.Server.Host, grpcPort),
 			Interval:                       "10s",
 			Timeout:                        "5s",
 			DeregisterCriticalServiceAfter: "1m",

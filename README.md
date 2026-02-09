@@ -602,4 +602,24 @@ protoc -I . \
 --openapiv2_out . --openapiv2_opt logtostderr=true \
 api/proto/auth/auth.proto
 
+## Gateway Config Example
 
+```yaml
+gateway:
+  metrics:
+    sample_rate: 0.1
+    upstream_sample_rate: 1.0
+  proxy:
+    connect_timeout: 5s
+    response_header_timeout: 30s
+    max_idle_conns: 100
+    max_idle_conns_per_host: 20
+    max_conns_per_host: 0 # 0 = unlimited
+    idle_conn_timeout: 90s
+    tls_handshake_timeout: 10s
+    expect_continue_timeout: 1s
+    max_retries: 2       # idempotent requests only
+    retry_backoff: 100ms
+```
+
+More details: docs/gateway_config.md

@@ -1,22 +1,25 @@
+# 共享配置文件 (dev 环境)
+
 log:
-  log_type: local
-  log_level: debug
-loki:
-  url: http://172.29.16.1:3100/loki/api/v1/push
-  username: easy
-  password: easymPhase
+  log_level: "info"
+  log_type: "console" # 满足 'oneof' 验证
+
+server:
+  port: 8080 # 默认端口
+
 database:
-  type: postgres
-  host: 172.29.16.1
+  type: "postgres"
+  host: "172.29.16.1"
   port: 5432
-  user: easy
-  password: easypass
-  database: easydb
+  user: "easy"
+  password: "easypass"
+  database: "easydb"
   # 连接池配置
   max_idle_conns: 10
   max_open_conns: 100
   conn_max_lifetime: 3600
   conn_max_idle_time: 1800
+
 cache:
   redis:
     address: "172.29.16.1:6379"
@@ -25,7 +28,24 @@ cache:
     # 缓存防护配置
     null_cache_expire: 60
     mutex_expire: 10
+
+consul:
+  host: "localhost:8500"
+  key_path: easyms/share/${env};easyms/${server_name}/${env}
+  reload_on_changes: true
+
 oauth2:
-  jwt_secret: "a-secure-and-long-secret-key-for-dev"
+  jwt_secret: "a-long-and-secure-secret-key-for-dev"
+  issuer: "easyms-auth-svc" # 满足 'required'
+
+tracing:
+  enable: true
+  endpoint: "http://172.29.16.1:14268/api"
+
+loki:
+  url: "http://172.29.16.1:3100/loki/api/v1/push"
+  username: "easy"
+  password: "easymPhase"
+
 rabbitmq:
   url: "amqp://guest:guest@172.29.16.1:5672/"

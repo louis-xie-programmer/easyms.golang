@@ -8,7 +8,7 @@ server:
 tracing:
   enable: true
   # Correct: Provide only the host and port. The path will be specified in the code.
-  endpoint: "172.29.16.1:4318"
+  endpoint: "http://172.29.16.1:4318"
 
 oauth2:
   jwt_secret: "your-super-secret-key-that-is-at-least-32-bytes-long"

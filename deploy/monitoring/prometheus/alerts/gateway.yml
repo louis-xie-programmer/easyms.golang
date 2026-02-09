@@ -1,0 +1,59 @@
+groups:
+  - name: gateway.rules
+    rules:
+      - alert: GatewayHighErrorRate
+        expr: |
+          100 * sum(rate(gateway_requests_total{status=~"5.."}[5m])) 
+          / sum(rate(gateway_requests_total[5m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Gateway 5xx error rate > 5%"
+          description: "Error rate has been above 5% for 5 minutes."
+
+      - alert: GatewayHighLatencyP95
+        expr: |
+          histogram_quantile(0.95, sum(rate(gateway_request_duration_seconds_bucket[5m])) by (le)) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Gateway p95 latency > 1s"
+          description: "p95 latency has been above 1s for 5 minutes."
+
+      - alert: GatewayCircuitOpen
+        expr: gateway_circuitbreaker_state{state="open"} == 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Circuit breaker open"
+          description: "A circuit breaker is open for at least 2 minutes."
+
+      - alert: GatewayUpstreamFailures
+        expr: sum(rate(gateway_upstream_failures_total[5m])) by (service, route, instance) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Upstream failures > 1 rps"
+          description: "Upstream failures are above 1 rps for 5 minutes."
+
+      - alert: GatewayRateLimitBlocked
+        expr: sum(rate(gateway_ratelimit_blocked_total[5m])) by (rule) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Rate limit blocked > 5 rps"
+          description: "Rate limit blocking exceeds 5 rps for 5 minutes."
+
+      - alert: GatewayRateLimitRedisErrors
+        expr: rate(gateway_ratelimit_redis_errors_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Rate limit Redis errors"
+          description: "Redis errors detected in rate limit script."

@@ -404,3 +404,19 @@ func (r *EasyRedis) SetEx(key string, value interface{}, expireSeconds int) erro
 	ctx := context.Background()
 	return r.redis.Set(ctx, key, value, time.Duration(expireSeconds)*time.Second).Err()
 }
+
+// Eval executes a Lua script on the server.
+func (r *EasyRedis) Eval(ctx context.Context, script string, keys []string, args ...interface{}) *redis.Cmd {
+	return r.redis.Eval(ctx, script, keys, args...)
+}
+
+// RunScript executes a redis.Script on the server.
+// It automatically handles SCRIPT LOAD and EVALSHA optimization.
+func (r *EasyRedis) RunScript(ctx context.Context, script *redis.Script, keys []string, args ...interface{}) *redis.Cmd {
+	return script.Run(ctx, r.redis, keys, args...)
+}
+
+// Close closes the Redis client.
+func (r *EasyRedis) Close() error {
+	return r.redis.Close()
+}

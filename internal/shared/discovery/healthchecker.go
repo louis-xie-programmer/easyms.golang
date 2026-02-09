@@ -1,16 +1,23 @@
 package discovery
 
 import (
+	"log"
 	"net"
 	"net/http"
-	"time"
 	"sync"
-	"log"
+	"time"
 )
 
 // HealthChecker 健康检查器接口
 type HealthChecker interface {
 	Check(address string) bool
+}
+
+// NoopHealthChecker always reports healthy.
+type NoopHealthChecker struct{}
+
+func (n *NoopHealthChecker) Check(address string) bool {
+	return true
 }
 
 // HTTPHealthChecker HTTP健康检查器
@@ -37,7 +44,7 @@ func (h *HTTPHealthChecker) Check(address string) bool {
 		return false
 	}
 	defer resp.Body.Close()
-	
+
 	return resp.StatusCode == http.StatusOK
 }
 
@@ -65,9 +72,9 @@ func (t *TCPHealthChecker) Check(address string) bool {
 
 // ServiceHealthManager 服务健康管理器
 type ServiceHealthManager struct {
-	checker      HealthChecker
+	checker       HealthChecker
 	serviceHealth map[string]bool
-	mutex        sync.RWMutex
+	mutex         sync.RWMutex
 }
 
 // NewServiceHealthManager 创建服务健康管理器
@@ -89,11 +96,11 @@ func (s *ServiceHealthManager) UpdateHealthStatus(address string, healthy bool) 
 func (s *ServiceHealthManager) IsHealthy(address string) bool {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
-	
+
 	if healthy, exists := s.serviceHealth[address]; exists {
 		return healthy
 	}
-	
+
 	// 如果没有记录，则执行一次健康检查
 	healthy := s.checker.Check(address)
 	s.serviceHealth[address] = healthy
@@ -104,12 +111,12 @@ func (s *ServiceHealthManager) IsHealthy(address string) bool {
 func (s *ServiceHealthManager) HealthCheckWorker(addresses []string, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	
+
 	for range ticker.C {
 		for _, addr := range addresses {
 			healthy := s.checker.Check(addr)
 			s.UpdateHealthStatus(addr, healthy)
-			
+
 			if !healthy {
 				log.Printf("Service %s is unhealthy", addr)
 			}
